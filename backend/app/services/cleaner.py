@@ -53,14 +53,14 @@ class TextCleaner:
     @classmethod
     def extract_embedding_text(cls, title: str, clean_text: str) -> str:
         """
-        Combines title and first informative paragraph (or first 400 characters)
-        for high-quality dense vector embedding.
+        Combines headline and first informative paragraph with doubled headline weight
+        to ensure distinct entities (locations, objects, proper nouns) dominate semantic vector.
         """
         title = title.strip()
         paragraphs = [p.strip() for p in clean_text.split("\n") if len(p.strip()) > 30]
         first_para = paragraphs[0] if paragraphs else clean_text[:300]
         
-        return f"{title}\n\n{first_para}".strip()
+        return f"{title}\n{title}\n\n{first_para}".strip()
 
     @classmethod
     def strip_tracking_params(cls, url: str) -> str:
