@@ -183,9 +183,28 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
     }
   };
 
+  const fetchSourcesList = async () => {
+    try {
+      const srcs = await api.getAdminSources();
+      if (srcs && srcs.length > 0) {
+        setSourceList(srcs);
+        onUpdateSourceList(srcs);
+      }
+    } catch (e) {
+      console.warn('Admin sources fetch note:', e);
+    }
+  };
+
+  useEffect(() => {
+    if (sources && sources.length > 0) {
+      setSourceList(sources);
+    }
+  }, [sources]);
+
   useEffect(() => {
     if (isOpen) {
       fetchDetailedStats();
+      fetchSourcesList();
       api.getAdminSettings().then((cfg) => {
         if (cfg) {
           if (cfg.cheap_llm_model) {
@@ -223,6 +242,8 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
       fetchArticlesList(1);
     } else if (activeTab === 'stats') {
       fetchDetailedStats();
+    } else if (activeTab === 'sources') {
+      fetchSourcesList();
     }
   }, [activeTab, clusterCategoryFilter, clusterMinImportance, articleSourceFilter, articleClusterFilter, articleMediaFilter]);
 
