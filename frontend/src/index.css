@@ -1,0 +1,109 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --prism-bg-dark: #050811;
+    --prism-bg-light: #f4f6f9;
+  }
+
+  body {
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+
+  /* Typography Font Families */
+  body.font-sans-mode {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  body.font-serif-mode {
+    font-family: 'Newsreader', 'Merriweather', Georgia, serif;
+  }
+  body.font-mono-mode {
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* Working Font Scaling across all news content */
+  body.text-size-sm {
+    font-size: 12.5px;
+  }
+  body.text-size-sm h1, body.text-size-sm h2 {
+    font-size: 14.5px !important;
+    line-height: 1.35 !important;
+  }
+  body.text-size-sm p, body.text-size-sm .text-xs, body.text-size-sm .text-sm {
+    font-size: 12px !important;
+    line-height: 1.5 !important;
+  }
+
+  body.text-size-base {
+    font-size: 14px;
+  }
+  body.text-size-base h1, body.text-size-base h2 {
+    font-size: 16.5px !important;
+    line-height: 1.4 !important;
+  }
+  body.text-size-base p, body.text-size-base .text-xs, body.text-size-base .text-sm {
+    font-size: 13px !important;
+    line-height: 1.6 !important;
+  }
+
+  body.text-size-lg {
+    font-size: 16px;
+  }
+  body.text-size-lg h1, body.text-size-lg h2 {
+    font-size: 19px !important;
+    line-height: 1.45 !important;
+  }
+  body.text-size-lg p, body.text-size-lg .text-xs, body.text-size-lg .text-sm {
+    font-size: 15px !important;
+    line-height: 1.7 !important;
+  }
+}
+
+/* Glassmorphism Styles */
+.glass-panel {
+  background-color: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-color: rgba(226, 232, 240, 0.8);
+}
+.dark .glass-panel {
+  background-color: rgba(9, 15, 31, 0.88);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.glass-card {
+  background-color: #ffffff;
+  border-color: rgba(226, 232, 240, 0.9);
+}
+.dark .glass-card {
+  background-color: rgba(12, 20, 38, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Spectrum Accent Divider */
+.spectrum-divider {
+  height: 2px;
+  background: linear-gradient(90deg, #1969ae 0%, #1ca369 35%, #ef9630 65%, #db233d 100%);
+}
+
+/* Hide scrollbars but preserve functionality */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}

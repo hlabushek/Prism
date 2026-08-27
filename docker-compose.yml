@@ -1,0 +1,62 @@
+services:
+  # 1. PostgreSQL Database with pgvector extension
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: prism_db
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-prism_news}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-prism_news}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. FastAPI Backend with APScheduler & RouterAI Integration
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: prism_backend
+    restart: always
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-prism_news}
+      - ROUTERAI_API_KEY=${ROUTERAI_API_KEY:-}
+      - ROUTERAI_BASE_URL=${ROUTERAI_BASE_URL:-https://routerai.ru/api/v1}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-openai/text-embedding-3-small}
+      - CHEAP_LLM_MODEL=${CHEAP_LLM_MODEL:-openai/gpt-4o-mini}
+      - LLM_MODEL=${LLM_MODEL:-openai/gpt-5.6-luna}
+      - PROXY_URL=${PROXY_URL:-}
+      - PARSE_INTERVAL_MINUTES=${PARSE_INTERVAL_MINUTES:-10}
+      - LLM_ANALYSIS_INTERVAL_MINUTES=${LLM_ANALYSIS_INTERVAL_MINUTES:-25}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHANNEL_ID=${TELEGRAM_CHANNEL_ID:-@prism_news_ai}
+      - SECRET_KEY=${SECRET_KEY:-prism_ultra_secret_jwt_key_2026}
+      - ADMIN_TELEGRAM_USERNAME=${ADMIN_TELEGRAM_USERNAME:-Not_Hleb}
+      - ADMIN_TELEGRAM_ID=${ADMIN_TELEGRAM_ID:-6541226081}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # 3. React + Vite + Tailwind Frontend (Telegram Mini App)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: prism_frontend
+    restart: always
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
