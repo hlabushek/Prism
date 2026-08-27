@@ -40,8 +40,8 @@ class Settings(BaseSettings):
     RECALCULATE_TRUST_INTERVAL_HOURS: int = 24
 
     # Clustering settings (calibrated for cosine similarity of multilingual text-embedding-3-small)
-    SIMILARITY_THRESHOLD: float = 0.38
-    LOOKBACK_HOURS: int = 24
+    SIMILARITY_THRESHOLD: float = 0.52
+    LOOKBACK_HOURS: int = 48
 
     # Telegram Bot & Channel Integration
     TELEGRAM_BOT_TOKEN: str = "8940282710:AAG8d_Gd7jBpEv6WnahJoGmjQnRoEuoqtEE"

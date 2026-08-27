@@ -33,6 +33,9 @@ class ClusteringService:
         # Cosine distance cutoff (distance = 1 - similarity)
         max_distance = 1.0 - self.threshold
 
+        if "postgresql" not in settings.DATABASE_URL:
+            return await self._fallback_match_cluster(db, article_embedding, cutoff_time, max_distance)
+
         try:
             # PostgreSQL pgvector query for nearest article with existing cluster
             query = (

@@ -107,75 +107,77 @@ class TelegramChannelBotService:
             btn["icon_custom_emoji_id"] = str(self.emoji_id)
         reply_markup = {"inline_keyboard": [[btn]]}
 
-        try:
-            async with self._get_client(timeout=12.0) as client:
-                images = [u for u in (media_urls or []) if u and u.startswith("http")]
-                
-                if len(images) == 1:
-                    resp = await client.post(
-                        f"{self.api_url}/sendPhoto",
-                        json={
-                            "chat_id": target_channel,
-                            "photo": images[0],
-                            "caption": caption,
-                            "parse_mode": "HTML",
-                            "reply_markup": reply_markup,
-                        },
-                    )
-                elif len(images) > 1:
-                    media_group = [
-                        {"type": "photo", "media": images[0], "caption": caption, "parse_mode": "HTML"}
-                    ]
-                    for img in images[1:3]:
-                        media_group.append({"type": "photo", "media": img})
+        for attempt in range(1, 3):
+            try:
+                async with self._get_client(timeout=15.0) as client:
+                    images = [u for u in (media_urls or []) if u and u.startswith("http")]
                     
-                    resp = await client.post(
-                        f"{self.api_url}/sendMediaGroup",
-                        json={
-                            "chat_id": target_channel,
-                            "media": media_group,
-                        },
-                    )
-                else:
-                    resp = await client.post(
-                        f"{self.api_url}/sendMessage",
-                        json={
-                            "chat_id": target_channel,
-                            "text": caption,
-                            "parse_mode": "HTML",
-                            "reply_markup": reply_markup,
-                            "disable_web_page_preview": False,
-                        },
-                    )
-
-                if resp.status_code != 200 and images:
-                    logger.warning(f"sendPhoto/sendMediaGroup failed ({resp.status_code}), falling back to sendMessage: {resp.text}")
-                    resp = await client.post(
-                        f"{self.api_url}/sendMessage",
-                        json={
-                            "chat_id": target_channel,
-                            "text": caption,
-                            "parse_mode": "HTML",
-                            "reply_markup": reply_markup,
-                            "disable_web_page_preview": False,
-                        },
-                    )
-
-                if resp.status_code == 200:
-                    data = resp.json()
-                    msg_id = None
-                    if isinstance(data.get("result"), list):
-                        msg_id = data["result"][0].get("message_id")
+                    if len(images) == 1:
+                        resp = await client.post(
+                            f"{self.api_url}/sendPhoto",
+                            json={
+                                "chat_id": target_channel,
+                                "photo": images[0],
+                                "caption": caption,
+                                "parse_mode": "HTML",
+                                "reply_markup": reply_markup,
+                            },
+                        )
+                    elif len(images) > 1:
+                        media_group = [
+                            {"type": "photo", "media": images[0], "caption": caption, "parse_mode": "HTML"}
+                        ]
+                        for img in images[1:3]:
+                            media_group.append({"type": "photo", "media": img})
+                        
+                        resp = await client.post(
+                            f"{self.api_url}/sendMediaGroup",
+                            json={
+                                "chat_id": target_channel,
+                                "media": media_group,
+                            },
+                        )
                     else:
-                        msg_id = data.get("result", {}).get("message_id")
-                    logger.info(f"Published cluster #{cluster_id} to Telegram. Message ID: {msg_id}")
-                    return msg_id
-                else:
-                    logger.error(f"Failed to post to Telegram: {resp.text}")
-                    return None
-        except Exception as e:
-            logger.error(f"Error publishing story to Telegram: {e}")
-            return None
+                        resp = await client.post(
+                            f"{self.api_url}/sendMessage",
+                            json={
+                                "chat_id": target_channel,
+                                "text": caption,
+                                "parse_mode": "HTML",
+                                "reply_markup": reply_markup,
+                                "disable_web_page_preview": False,
+                            },
+                        )
+
+                    if resp.status_code != 200 and images:
+                        logger.warning(f"sendPhoto/sendMediaGroup failed ({resp.status_code}), falling back to sendMessage: {resp.text}")
+                        resp = await client.post(
+                            f"{self.api_url}/sendMessage",
+                            json={
+                                "chat_id": target_channel,
+                                "text": caption,
+                                "parse_mode": "HTML",
+                                "reply_markup": reply_markup,
+                                "disable_web_page_preview": False,
+                            },
+                        )
+
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        msg_id = None
+                        if isinstance(data.get("result"), list):
+                            msg_id = data["result"][0].get("message_id")
+                        else:
+                            msg_id = data.get("result", {}).get("message_id")
+                        logger.info(f"Published cluster #{cluster_id} to Telegram. Message ID: {msg_id}")
+                        return msg_id
+                    else:
+                        logger.error(f"Failed to post to Telegram (attempt {attempt}): {resp.text}")
+            except Exception as e:
+                logger.warning(f"Error publishing story to Telegram (attempt {attempt}): {e}")
+                if attempt < 2:
+                    await asyncio.sleep(1.5)
+        return None
 
     async def update_story_in_channel(
         self,

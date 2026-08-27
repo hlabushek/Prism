@@ -227,12 +227,11 @@ class NewsPipeline:
         4. Synthesizes AI story cards via LLM_MODEL with media and real analytics.
         """
         logger.info("Starting Clustering & LLM Analysis Task...")
-        cutoff_time = datetime.utcnow() - timedelta(hours=settings.LOOKBACK_HOURS)
+        cutoff_time = datetime.utcnow() - timedelta(hours=max(48, settings.LOOKBACK_HOURS * 2))
 
-        # Find unclustered articles from the last 24h
+        # Find all unclustered articles with valid embeddings
         query = select(Article).options(selectinload(Article.source)).where(
             and_(
-                Article.published_at >= cutoff_time,
                 Article.cluster_id.is_(None),
                 Article.embedding.isnot(None)
             )
@@ -457,6 +456,8 @@ class NewsPipeline:
                             media_urls=media_urls,
                         )
                         if msg_id:
+                            cluster.tg_channel_message_id = msg_id
+                            await db.commit()
                             logger.info(f"Published StoryCluster #{cluster.id} to Telegram channel (msg_id={msg_id})")
                     except Exception as post_err:
                         logger.warning(f"Could not auto-post StoryCluster #{cluster.id} to channel: {post_err}")
