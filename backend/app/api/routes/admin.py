@@ -76,8 +76,11 @@ class PipelineSettingsSchema(BaseModel):
     llm_model: str = settings.LLM_MODEL
     importance_threshold: int = settings.IMPORTANCE_THRESHOLD
     story_update_window_hours: int = settings.STORY_UPDATE_WINDOW_HOURS
-    parse_interval_minutes: int = settings.PARSE_INTERVAL_MINUTES
-    llm_interval_minutes: int = settings.LLM_ANALYSIS_INTERVAL_MINUTES
+    parse_interval_minutes: int = getattr(settings, "PARSE_INTERVAL_MINUTES", 10)
+    new_stories_interval_minutes: int = getattr(settings, "NEW_STORIES_INTERVAL_MINUTES", 25)
+    update_stories_interval_minutes: int = getattr(settings, "UPDATE_STORIES_INTERVAL_MINUTES", 60)
+    llm_interval_minutes: int = getattr(settings, "LLM_ANALYSIS_INTERVAL_MINUTES", 25)
+    auto_update_stories: bool = getattr(settings, "AUTO_UPDATE_STORIES", True)
     auto_post_to_channel: bool = settings.AUTO_POST_TO_CHANNEL
     telegram_channel_id: Optional[str] = settings.TELEGRAM_CHANNEL_ID
     telegram_discussion_group_id: Optional[str] = settings.TELEGRAM_DISCUSSION_GROUP_ID
@@ -91,8 +94,11 @@ _runtime_settings = {
     "llm_model": settings.LLM_MODEL,
     "importance_threshold": settings.IMPORTANCE_THRESHOLD,
     "story_update_window_hours": settings.STORY_UPDATE_WINDOW_HOURS,
-    "parse_interval_minutes": settings.PARSE_INTERVAL_MINUTES,
-    "llm_interval_minutes": settings.LLM_ANALYSIS_INTERVAL_MINUTES,
+    "parse_interval_minutes": getattr(settings, "PARSE_INTERVAL_MINUTES", 10),
+    "new_stories_interval_minutes": getattr(settings, "NEW_STORIES_INTERVAL_MINUTES", 25),
+    "update_stories_interval_minutes": getattr(settings, "UPDATE_STORIES_INTERVAL_MINUTES", 60),
+    "llm_interval_minutes": getattr(settings, "LLM_ANALYSIS_INTERVAL_MINUTES", 25),
+    "auto_update_stories": getattr(settings, "AUTO_UPDATE_STORIES", True),
     "auto_post_to_channel": settings.AUTO_POST_TO_CHANNEL,
     "telegram_channel_id": settings.TELEGRAM_CHANNEL_ID,
     "telegram_discussion_group_id": settings.TELEGRAM_DISCUSSION_GROUP_ID,
@@ -669,8 +675,9 @@ async def update_admin_settings(payload: PipelineSettingsSchema, db: AsyncSessio
     try:
         from app.services.scheduler import reschedule_jobs
         reschedule_jobs(
-            parse_minutes=data.get("parse_interval_minutes", settings.PARSE_INTERVAL_MINUTES),
-            llm_minutes=data.get("llm_interval_minutes", settings.LLM_ANALYSIS_INTERVAL_MINUTES)
+            parse_minutes=data.get("parse_interval_minutes", getattr(settings, "PARSE_INTERVAL_MINUTES", 10)),
+            new_stories_minutes=data.get("new_stories_interval_minutes", getattr(settings, "NEW_STORIES_INTERVAL_MINUTES", 25)),
+            update_stories_minutes=data.get("update_stories_interval_minutes", getattr(settings, "UPDATE_STORIES_INTERVAL_MINUTES", 60))
         )
     except Exception as e:
         import logging

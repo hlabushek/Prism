@@ -34,9 +34,12 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./prism_news.db"
     
-    # Scheduler Intervals
+    # Scheduler Intervals (Separate intervals for Ingestion, New Stories, and Story Updates)
     PARSE_INTERVAL_MINUTES: int = 10
-    LLM_ANALYSIS_INTERVAL_MINUTES: int = 25
+    NEW_STORIES_INTERVAL_MINUTES: int = 25
+    UPDATE_STORIES_INTERVAL_MINUTES: int = 60
+    LLM_ANALYSIS_INTERVAL_MINUTES: int = 25  # legacy fallback
+    AUTO_UPDATE_STORIES: bool = True
     RECALCULATE_TRUST_INTERVAL_HOURS: int = 24
 
     # Clustering and Story lifecycle settings

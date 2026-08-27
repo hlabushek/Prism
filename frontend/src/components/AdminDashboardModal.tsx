@@ -106,7 +106,9 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
   const [customModelTarget, setCustomModelTarget] = useState<'cheap' | 'main'>('cheap');
 
   const [parseInterval, setParseInterval] = useState(10);
-  const [llmInterval, setLlmInterval] = useState(25);
+  const [newStoriesInterval, setNewStoriesInterval] = useState(25);
+  const [updateStoriesInterval, setUpdateStoriesInterval] = useState(60);
+  const [autoUpdateStories, setAutoUpdateStories] = useState(true);
   const [importanceThreshold, setImportanceThreshold] = useState(6);
   const [storyUpdateWindowHours, setStoryUpdateWindowHours] = useState(12);
 
@@ -201,7 +203,9 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
           if (cfg.importance_threshold !== undefined) setImportanceThreshold(cfg.importance_threshold);
           if (cfg.story_update_window_hours !== undefined) setStoryUpdateWindowHours(cfg.story_update_window_hours);
           if (cfg.parse_interval_minutes) setParseInterval(cfg.parse_interval_minutes);
-          if (cfg.llm_interval_minutes) setLlmInterval(cfg.llm_interval_minutes);
+          if (cfg.new_stories_interval_minutes) setNewStoriesInterval(cfg.new_stories_interval_minutes);
+          if (cfg.update_stories_interval_minutes) setUpdateStoriesInterval(cfg.update_stories_interval_minutes);
+          if (cfg.auto_update_stories !== undefined) setAutoUpdateStories(cfg.auto_update_stories);
           if (cfg.auto_post_to_channel !== undefined) setAutoPost(cfg.auto_post_to_channel);
           if (cfg.telegram_channel_id) setChannelId(cfg.telegram_channel_id);
           if (cfg.telegram_discussion_group_id) setDiscussionGroupId(cfg.telegram_discussion_group_id);
@@ -232,7 +236,10 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
         importance_threshold: importanceThreshold,
         story_update_window_hours: storyUpdateWindowHours,
         parse_interval_minutes: parseInterval,
-        llm_interval_minutes: llmInterval,
+        new_stories_interval_minutes: newStoriesInterval,
+        update_stories_interval_minutes: updateStoriesInterval,
+        auto_update_stories: autoUpdateStories,
+        llm_interval_minutes: newStoriesInterval,
         auto_post_to_channel: autoPost,
         telegram_channel_id: channelId,
         telegram_discussion_group_id: discussionGroupId,
@@ -841,39 +848,98 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
                   </div>
                 </div>
 
-                {/* Separate Intervals */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-200 dark:border-white/5">
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      📡 Интервал сбора источников (Парсинг)
-                    </label>
-                    <div className="flex items-center space-x-2">
-                      <input
-                        type="number"
-                        min="2"
-                        max="60"
-                        value={parseInterval}
-                        onChange={(e) => setParseInterval(parseInt(e.target.value, 10))}
-                        className="p-2.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-white/10 text-xs w-28 font-mono"
-                      />
-                      <span className="text-slate-500">минут (скачивание RSS/TG)</span>
+                {/* 3 Separate Pipeline Intervals */}
+                <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-white/5">
+                  <div className="flex items-center justify-between">
+                    <div className="font-bold text-slate-900 dark:text-white text-xs flex items-center space-x-1.5">
+                      <Clock className="w-3.5 h-3.5 text-sky-500" />
+                      <span>Раздельные интервалы работы пайплайна</span>
                     </div>
+
+                    {/* Auto Update Stories Toggle */}
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <span className="text-[11px] text-slate-600 dark:text-slate-400 font-medium">
+                        Авто-обновление старых сюжетов:
+                      </span>
+                      <div className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={autoUpdateStories}
+                          onChange={(e) => setAutoUpdateStories(e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-8 h-4 bg-slate-300 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-indigo-500"></div>
+                      </div>
+                    </label>
                   </div>
 
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      🧠 Интервал анализа и кластеризации ИИ
-                    </label>
-                    <div className="flex items-center space-x-2">
-                      <input
-                        type="number"
-                        min="5"
-                        max="120"
-                        value={llmInterval}
-                        onChange={(e) => setLlmInterval(parseInt(e.target.value, 10))}
-                        className="p-2.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-white/10 text-xs w-28 font-mono"
-                      />
-                      <span className="text-slate-500">минут (вызов LLM моделей)</span>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    {/* 1. Parsing */}
+                    <div className="p-3 rounded-xl bg-white dark:bg-slate-800/80 border border-slate-200/80 dark:border-white/10 space-y-1.5">
+                      <label className="block text-[11px] font-bold text-slate-800 dark:text-slate-200">
+                        📡 1. Сбор новостей
+                      </label>
+                      <div className="flex items-center space-x-1.5">
+                        <input
+                          type="number"
+                          min="2"
+                          max="60"
+                          value={parseInterval}
+                          onChange={(e) => setParseInterval(parseInt(e.target.value, 10))}
+                          className="p-2 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-white/10 text-xs w-20 font-mono font-bold"
+                        />
+                        <span className="text-[10px] text-slate-500">минут</span>
+                      </div>
+                      <p className="text-[9.5px] text-slate-400 leading-tight">
+                        Парсинг RSS лент и Telegram каналов
+                      </p>
+                    </div>
+
+                    {/* 2. New Stories */}
+                    <div className="p-3 rounded-xl bg-white dark:bg-slate-800/80 border border-slate-200/80 dark:border-white/10 space-y-1.5">
+                      <label className="block text-[11px] font-bold text-sky-600 dark:text-sky-400">
+                        ✨ 2. Новые сюжеты
+                      </label>
+                      <div className="flex items-center space-x-1.5">
+                        <input
+                          type="number"
+                          min="5"
+                          max="120"
+                          value={newStoriesInterval}
+                          onChange={(e) => setNewStoriesInterval(parseInt(e.target.value, 10))}
+                          className="p-2 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-white/10 text-xs w-20 font-mono font-bold text-sky-500"
+                        />
+                        <span className="text-[10px] text-slate-500">минут</span>
+                      </div>
+                      <p className="text-[9.5px] text-slate-400 leading-tight">
+                        Кластеризация и синтез карточек
+                      </p>
+                    </div>
+
+                    {/* 3. Update Stories */}
+                    <div className={`p-3 rounded-xl border space-y-1.5 transition-opacity ${
+                      autoUpdateStories
+                        ? 'bg-white dark:bg-slate-800/80 border-slate-200/80 dark:border-white/10'
+                        : 'bg-slate-100/50 dark:bg-slate-900/50 border-slate-200/40 dark:border-white/5 opacity-50'
+                    }`}>
+                      <label className="block text-[11px] font-bold text-indigo-600 dark:text-indigo-400">
+                        🔄 3. Обновление статей
+                      </label>
+                      <div className="flex items-center space-x-1.5">
+                        <input
+                          type="number"
+                          min="10"
+                          max="360"
+                          disabled={!autoUpdateStories}
+                          value={updateStoriesInterval}
+                          onChange={(e) => setUpdateStoriesInterval(parseInt(e.target.value, 10))}
+                          className="p-2 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-white/10 text-xs w-20 font-mono font-bold text-indigo-500"
+                        />
+                        <span className="text-[10px] text-slate-500">минут</span>
+                      </div>
+                      <p className="text-[9.5px] text-slate-400 leading-tight">
+                        Ресинтез только при новых фактах
+                      </p>
                     </div>
                   </div>
                 </div>

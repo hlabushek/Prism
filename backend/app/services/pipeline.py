@@ -310,20 +310,29 @@ class NewsPipeline:
 
         logger.info(f"Ingestion & Vectorization completed. Saved {total_saved} new articles.")
 
-    async def run_clustering_and_analysis(self, db: AsyncSession):
+    async def run_new_stories_analysis(self, db: AsyncSession):
+        """Runs clustering specifically for creating new story candidates."""
+        await self.run_clustering_and_analysis(db, mode="new_stories")
+
+    async def run_update_stories_analysis(self, db: AsyncSession):
+        """Runs re-synthesis specifically for updating existing stories."""
+        await self.run_clustering_and_analysis(db, mode="update_stories")
+
+    async def run_clustering_and_analysis(self, db: AsyncSession, mode: str = "all"):
         """
         Stage 3 & 4:
+        mode: "all" (both), "new_stories" (only new), "update_stories" (only update)
         1. Compares 24h cosine distances to group articles.
         2. Applies programmatic cluster size limit (len(unique_sources) >= 2).
         3. Applies preliminary cheap LLM importance filter (CHEAP_LLM_MODEL).
         4. Synthesizes AI story cards via LLM_MODEL with media and real analytics.
         """
         if self._clustering_lock.locked():
-            logger.info("Clustering & Analysis task is already in progress. Skipping concurrent trigger.")
+            logger.info(f"Clustering & Analysis task is already in progress ({mode}). Skipping concurrent trigger.")
             return
 
         async with self._clustering_lock:
-            logger.info("Starting Clustering & LLM Analysis Task...")
+            logger.info(f"Starting Clustering & LLM Analysis Task (mode={mode})...")
             update_window_hours = getattr(settings, "STORY_UPDATE_WINDOW_HOURS", 12)
             update_cutoff = datetime.utcnow() - timedelta(hours=update_window_hours)
             lookback_cutoff = datetime.utcnow() - timedelta(hours=max(48, settings.LOOKBACK_HOURS * 2))
@@ -344,7 +353,7 @@ class NewsPipeline:
                 logger.info("No unclustered articles found.")
                 return
 
-            logger.info(f"Processing {len(unclustered)} unclustered articles (update window: {update_window_hours}h)...")
+            logger.info(f"Processing {len(unclustered)} unclustered articles (mode={mode}, update window={update_window_hours}h)...")
 
             # Step 1: Assign to existing clusters ONLY IF within the update window (e.g. 12h)
             remaining_articles = []
@@ -374,82 +383,103 @@ class NewsPipeline:
                 else:
                     remaining_articles.append(art)
 
-        # Step 1.5: Re-analyze updated clusters with new incoming publications & update Telegram post
-        for cid in clusters_to_update:
-            try:
-                cluster = await db.get(StoryCluster, cid)
-                if not cluster:
-                    continue
-                # Load all articles for this cluster with sources
-                all_arts_res = await db.execute(
-                    select(Article).options(selectinload(Article.source))
-                    .where(Article.cluster_id == cid)
-                    .order_by(Article.published_at.desc())
-                )
-                cluster_articles = all_arts_res.scalars().all()
-                if not cluster_articles:
-                    continue
-
-                sources_count = len({a.source_id for a in cluster_articles if a.source_id})
-                cluster.sources_count = sources_count
-                cluster.article_count = len(cluster_articles)
-
-                # Cap at up to 8 representative articles to prevent token explosions
-                sampled_articles = []
-                seen_sources = set()
-                for a in cluster_articles:
-                    if a.source_id not in seen_sources or len(sampled_articles) < 4:
-                        seen_sources.add(a.source_id)
-                        sampled_articles.append(a)
-                    if len(sampled_articles) >= 8:
-                        break
-                if not sampled_articles:
-                    sampled_articles = cluster_articles[:8]
-
-                article_dicts = [
-                    {
-                        "title": a.title,
-                        "url": a.url,
-                        "source_name": a.source.name if a.source else "СМИ",
-                        "clean_content": a.clean_content or a.title
-                    }
-                    for a in sampled_articles
-                ]
-
-                # Synthesize fresh multi-source analytical card
-                story_card = await ai_service.generate_story_card(article_dicts)
-                cluster.title = story_card.title
-                cluster.summary = story_card.summary
-                cluster.category = normalize_category(story_card.category)
-                cluster.sentiment = story_card.sentiment
-                cluster.importance_score = getattr(story_card, "importance_score", cluster.importance_score) or 7
-                cluster.importance_reason = getattr(story_card, "importance_reason", cluster.importance_reason)
-                cluster.political_vectors = [v.model_dump() for v in story_card.political_vectors]
-                cluster.quotes = [q.model_dump() for q in story_card.quotes]
-                cluster.verified_facts = story_card.verified_facts
-                cluster.blindspots = story_card.blindspots
-                cluster.updated_at = datetime.utcnow()
-                await db.commit()
-
-                # Update live Telegram Channel post if published
-                if cluster.tg_channel_message_id:
-                    unique_sources = [a.source.name for a in cluster_articles if a.source and a.source.name]
-                    # Deduplicate preserving order
-                    seen_s = set()
-                    dedup_sources = [x for x in unique_sources if not (x in seen_s or seen_s.add(x))]
-                    await telegram_bot_service.update_story_in_channel(
-                        cluster_id=cluster.id,
-                        message_id=cluster.tg_channel_message_id,
-                        title=cluster.title,
-                        summary=cluster.summary,
-                        verified_facts=cluster.verified_facts,
-                        sentiment=cluster.sentiment,
-                        consensus_score=cluster.consensus_score,
-                        sources_list=dedup_sources
+        # Step 1.5: Smart Re-synthesis of updated clusters (ONLY IF mode allows and significant new facts exist)
+        auto_update_enabled = getattr(settings, "AUTO_UPDATE_STORIES", True)
+        if auto_update_enabled and mode in ("all", "update_stories") and clusters_to_update:
+            for cid in clusters_to_update:
+                try:
+                    cluster = await db.get(StoryCluster, cid)
+                    if not cluster:
+                        continue
+                    # Load all articles for this cluster with sources
+                    all_arts_res = await db.execute(
+                        select(Article).options(selectinload(Article.source))
+                        .where(Article.cluster_id == cid)
+                        .order_by(Article.published_at.desc())
                     )
-                logger.info(f"Successfully re-synthesized and updated cluster #{cid} with {len(cluster_articles)} sources.")
-            except Exception as update_err:
-                logger.error(f"Error re-synthesizing updated cluster #{cid}: {update_err}")
+                    cluster_articles = all_arts_res.scalars().all()
+                    if not cluster_articles:
+                        continue
+
+                    # Smart Threshold: Check if re-synthesis is really warranted
+                    current_camps = set(a.source.default_camp for a in cluster_articles if a.source and a.source.default_camp)
+                    prev_camps = set(v.get("camp") for v in (cluster.political_vectors or []) if isinstance(v, dict) and v.get("tone") != "нет данных")
+                    new_camp_appeared = bool(current_camps - prev_camps)
+                    articles_diff = len(cluster_articles) - (cluster.article_count or 0)
+
+                    # If no new camp and fewer than 2 new articles, skip heavy LLM re-synthesis!
+                    if not new_camp_appeared and articles_diff < 2 and cluster.summary:
+                        logger.info(f"Skipping heavy re-synthesis for cluster #{cid} (minor update: +{articles_diff} arts, same camps). Saved LLM tokens.")
+                        cluster.article_count = len(cluster_articles)
+                        cluster.sources_count = len({a.source_id for a in cluster_articles if a.source_id})
+                        await db.commit()
+                        continue
+
+                    sources_count = len({a.source_id for a in cluster_articles if a.source_id})
+                    cluster.sources_count = sources_count
+                    cluster.article_count = len(cluster_articles)
+
+                    # Cap at up to 8 representative articles to prevent token explosions
+                    sampled_articles = []
+                    seen_sources = set()
+                    for a in cluster_articles:
+                        if a.source_id not in seen_sources or len(sampled_articles) < 4:
+                            seen_sources.add(a.source_id)
+                            sampled_articles.append(a)
+                        if len(sampled_articles) >= 8:
+                            break
+                    if not sampled_articles:
+                        sampled_articles = cluster_articles[:8]
+
+                    article_dicts = [
+                        {
+                            "title": a.title,
+                            "url": a.url,
+                            "source_name": a.source.name if a.source else "СМИ",
+                            "clean_content": a.clean_content or a.title
+                        }
+                        for a in sampled_articles
+                    ]
+
+                    # Synthesize fresh multi-source analytical card
+                    story_card = await ai_service.generate_story_card(article_dicts)
+                    cluster.title = story_card.title
+                    cluster.summary = story_card.summary
+                    cluster.category = normalize_category(story_card.category)
+                    cluster.sentiment = story_card.sentiment
+                    cluster.importance_score = getattr(story_card, "importance_score", cluster.importance_score) or 7
+                    cluster.importance_reason = getattr(story_card, "importance_reason", cluster.importance_reason)
+                    cluster.political_vectors = [v.model_dump() for v in story_card.political_vectors]
+                    cluster.quotes = [q.model_dump() for q in story_card.quotes]
+                    cluster.verified_facts = story_card.verified_facts
+                    cluster.blindspots = story_card.blindspots
+                    cluster.updated_at = datetime.utcnow()
+                    await db.commit()
+
+                    # Update live Telegram Channel post if published
+                    if cluster.tg_channel_message_id:
+                        unique_sources = [a.source.name for a in cluster_articles if a.source and a.source.name]
+                        # Deduplicate preserving order
+                        seen_s = set()
+                        dedup_sources = [x for x in unique_sources if not (x in seen_s or seen_s.add(x))]
+                        await telegram_bot_service.update_story_in_channel(
+                            cluster_id=cluster.id,
+                            message_id=cluster.tg_channel_message_id,
+                            title=cluster.title,
+                            summary=cluster.summary,
+                            verified_facts=cluster.verified_facts,
+                            sentiment=cluster.sentiment,
+                            consensus_score=cluster.consensus_score,
+                            sources_list=dedup_sources
+                        )
+                    logger.info(f"Successfully re-synthesized and updated cluster #{cid} with {len(cluster_articles)} sources.")
+                except Exception as update_err:
+                    logger.error(f"Error re-synthesizing updated cluster #{cid}: {update_err}")
+
+        # If mode is update_stories only, skip new cluster formation
+        if mode == "update_stories":
+            logger.info("Mode is 'update_stories': finished update pass.")
+            return
 
         # Step 2: Transitive Graph Grouping (BFS Connected Components) of remaining unclustered articles
         clusters_to_create: List[List[Article]] = []
