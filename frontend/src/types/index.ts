@@ -63,6 +63,8 @@ export interface StoryCluster {
   category?: string;
   consensus_score?: number; // 0 to 100%
   polarization_score?: number; // 0 to 100%
+  importance_score?: number; // 1 to 10
+  importance_reason?: string;
   media?: MediaItem[];
   timeline?: TimelineEvent[];
   political_vectors: PoliticalVectorItem[];
@@ -171,8 +173,26 @@ export interface AdminArticleItem {
   created_at: string | null;
   cluster_id: number | null;
   cluster_title: string | null;
+  importance_score?: number | null;
+  importance_reason?: string | null;
   media_url: string | null;
   snippet: string;
+}
+
+export interface AdminClusterItem {
+  id: number;
+  title: string;
+  summary: string;
+  category: string;
+  sentiment: number;
+  importance_score: number;
+  importance_reason: string;
+  consensus_score: number;
+  sources_count: number;
+  article_count: number;
+  tg_channel_message_id: number | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface SourceActivityItem {
@@ -206,6 +226,22 @@ export interface AdminDetailedStats {
     categories: Array<{ category: string; count: number }>;
   };
   sources: SourceActivityItem[];
+  token_usage?: {
+    last_24h: {
+      total_tokens: number;
+      total_cost_rub: number;
+      stages: {
+        embedding: { calls: number; prompt_tokens: number; completion_tokens: number; total_tokens: number; cost_rub: number };
+        cheap_filter: { calls: number; prompt_tokens: number; completion_tokens: number; total_tokens: number; cost_rub: number };
+        story_synthesis: { calls: number; prompt_tokens: number; completion_tokens: number; total_tokens: number; cost_rub: number };
+      };
+    };
+    all_time: {
+      total_tokens: number;
+      total_cost_rub: number;
+      total_calls: number;
+    };
+  };
   social: {
     total_users: number;
     total_comments: number;

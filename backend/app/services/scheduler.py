@@ -61,6 +61,23 @@ def start_scheduler():
     logger.info("APScheduler started successfully.")
 
 
+def reschedule_jobs(parse_minutes: int, llm_minutes: int):
+    """Dynamically updates the schedule intervals of running background jobs."""
+    if scheduler.running:
+        try:
+            scheduler.reschedule_job(
+                "news_parser_job",
+                trigger=IntervalTrigger(minutes=max(1, parse_minutes))
+            )
+            scheduler.reschedule_job(
+                "news_llm_analysis_job",
+                trigger=IntervalTrigger(minutes=max(1, llm_minutes))
+            )
+            logger.info(f"Dynamically rescheduled background jobs: parse={parse_minutes}m, llm={llm_minutes}m")
+        except Exception as e:
+            logger.error(f"Error rescheduling jobs: {e}")
+
+
 def shutdown_scheduler():
     """Stops the scheduler gracefully."""
     if scheduler.running:

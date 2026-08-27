@@ -13,6 +13,7 @@ from app.models.cluster import StoryCluster
 from app.models.article import Article
 from app.models.user import User
 from app.models.social import Comment, Favorite
+from app.models.setting import SystemSetting
 from app.services.pipeline import news_pipeline
 
 
@@ -241,6 +242,67 @@ async def get_admin_detailed_stats(db: AsyncSession = Depends(get_db)):
     usr_res = await db.execute(select(func.count(User.id)))
     total_users = usr_res.scalar() or 0
 
+    # 5. Token Usage & Budget Analytics
+    from app.models.ai_usage import AITokenUsage
+    
+    stage_breakdown_24h = {
+        "embedding": {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "cost_rub": 0.0},
+        "cheap_filter": {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "cost_rub": 0.0},
+        "story_synthesis": {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "cost_rub": 0.0}
+    }
+    total_tokens_24h = 0
+    total_cost_rub_24h = 0.0
+    total_tokens_all = 0
+    total_cost_rub_all = 0.0
+    total_calls_all = 0
+
+    try:
+        tok_24h_res = await db.execute(
+            select(
+                AITokenUsage.stage,
+                func.count(AITokenUsage.id).label("calls"),
+                func.sum(AITokenUsage.prompt_tokens).label("prompt_tokens"),
+                func.sum(AITokenUsage.completion_tokens).label("completion_tokens"),
+                func.sum(AITokenUsage.total_tokens).label("total_tokens"),
+                func.sum(AITokenUsage.estimated_cost_rub).label("cost_rub")
+            )
+            .where(AITokenUsage.created_at >= last_24h)
+            .group_by(AITokenUsage.stage)
+        )
+        
+        for r in tok_24h_res.all():
+            stg = r[0]
+            calls = r[1] or 0
+            p_toks = r[2] or 0
+            c_toks = r[3] or 0
+            t_toks = r[4] or 0
+            cost = float(r[5] or 0.0)
+            total_tokens_24h += t_toks
+            total_cost_rub_24h += cost
+            if stg in stage_breakdown_24h:
+                stage_breakdown_24h[stg] = {
+                    "calls": calls,
+                    "prompt_tokens": p_toks,
+                    "completion_tokens": c_toks,
+                    "total_tokens": t_toks,
+                    "cost_rub": round(cost, 4)
+                }
+
+        tok_all_res = await db.execute(
+            select(
+                func.sum(AITokenUsage.total_tokens).label("total_tokens"),
+                func.sum(AITokenUsage.estimated_cost_rub).label("cost_rub"),
+                func.count(AITokenUsage.id).label("calls")
+            )
+        )
+        all_row = tok_all_res.first()
+        if all_row:
+            total_tokens_all = int(all_row[0] or 0)
+            total_cost_rub_all = float(all_row[1] or 0.0)
+            total_calls_all = int(all_row[2] or 0)
+    except Exception as tok_err:
+        logger.debug(f"Token stats note: {tok_err}")
+
     return {
         "articles": {
             "total": total_articles,
@@ -256,6 +318,18 @@ async def get_admin_detailed_stats(db: AsyncSession = Depends(get_db)):
             "categories": categories_breakdown,
         },
         "sources": sources_breakdown,
+        "token_usage": {
+            "last_24h": {
+                "total_tokens": total_tokens_24h,
+                "total_cost_rub": round(total_cost_rub_24h, 4),
+                "stages": stage_breakdown_24h
+            },
+            "all_time": {
+                "total_tokens": total_tokens_all,
+                "total_cost_rub": round(total_cost_rub_all, 4),
+                "total_calls": total_calls_all
+            }
+        },
         "social": {
             "total_users": total_users,
             "total_comments": total_comments,
@@ -297,7 +371,9 @@ async def get_admin_articles(
         Article,
         NewsSource.name.label("source_name"),
         NewsSource.default_camp.label("source_camp"),
-        StoryCluster.title.label("cluster_title")
+        StoryCluster.title.label("cluster_title"),
+        StoryCluster.importance_score.label("cluster_importance_score"),
+        StoryCluster.importance_reason.label("cluster_importance_reason")
     ).outerjoin(NewsSource, Article.source_id == NewsSource.id)\
      .outerjoin(StoryCluster, Article.cluster_id == StoryCluster.id)
 
@@ -335,7 +411,7 @@ async def get_admin_articles(
     rows = result.all()
 
     items = []
-    for art, s_name, s_camp, c_title in rows:
+    for art, s_name, s_camp, c_title, c_imp_score, c_imp_reason in rows:
         snippet = (art.clean_content or art.raw_content or "")[:300]
         items.append({
             "id": art.id,
@@ -348,8 +424,71 @@ async def get_admin_articles(
             "created_at": art.created_at.isoformat() if art.created_at else None,
             "cluster_id": art.cluster_id,
             "cluster_title": c_title,
+            "importance_score": c_imp_score or (7 if art.cluster_id else None),
+            "importance_reason": c_imp_reason,
             "media_url": art.media_url,
             "snippet": snippet,
+        })
+
+    return {
+        "items": items,
+        "total": total_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": max(1, (total_count + page_size - 1) // page_size)
+    }
+
+
+@router.get("/clusters")
+async def get_admin_clusters(
+    page: int = 1,
+    page_size: int = 20,
+    search: Optional[str] = None,
+    category: Optional[str] = None,
+    min_importance: Optional[int] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """Allows administrators to inspect story clusters, their AI importance score, reason, and status."""
+    query = select(StoryCluster)
+    conditions = []
+    if search:
+        search_fmt = f"%{search.strip()}%"
+        conditions.append(StoryCluster.title.ilike(search_fmt))
+    if category:
+        conditions.append(StoryCluster.category == category)
+    if min_importance is not None:
+        conditions.append(StoryCluster.importance_score >= min_importance)
+
+    if conditions:
+        query = query.where(and_(*conditions))
+
+    count_query = select(func.count(StoryCluster.id))
+    if conditions:
+        count_query = count_query.where(and_(*conditions))
+    total_res = await db.execute(count_query)
+    total_count = total_res.scalar() or 0
+
+    offset = (page - 1) * page_size
+    query = query.order_by(StoryCluster.created_at.desc(), StoryCluster.id.desc()).offset(offset).limit(page_size)
+    result = await db.execute(query)
+    clusters = result.scalars().all()
+
+    items = []
+    for c in clusters:
+        items.append({
+            "id": c.id,
+            "title": c.title,
+            "summary": (c.summary or "")[:350],
+            "category": c.category,
+            "sentiment": c.sentiment,
+            "importance_score": c.importance_score or 7,
+            "importance_reason": c.importance_reason or "Значимый аналитический сюжет",
+            "consensus_score": c.consensus_score,
+            "sources_count": c.sources_count,
+            "article_count": c.article_count,
+            "tg_channel_message_id": c.tg_channel_message_id,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "updated_at": c.updated_at.isoformat() if c.updated_at else None,
         })
 
     return {
@@ -423,14 +562,142 @@ async def delete_admin_source(source_id: int, db: AsyncSession = Depends(get_db)
     return {"status": "deleted", "source_id": source_id}
 
 
+@router.delete("/articles/{article_id}")
+async def delete_admin_article(article_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Article).where(Article.id == article_id))
+    art = result.scalar_one_or_none()
+    if not art:
+        raise HTTPException(status_code=404, detail="Article not found")
+    await db.delete(art)
+    await db.commit()
+    return {"status": "deleted", "article_id": article_id}
+
+
+@router.delete("/clusters/{cluster_id}")
+async def delete_admin_cluster(cluster_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(StoryCluster).where(StoryCluster.id == cluster_id))
+    cluster = result.scalar_one_or_none()
+    if not cluster:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+    
+    # Attempt to delete from Telegram channel if published
+    if cluster.tg_channel_message_id and settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHANNEL_ID:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.post(
+                    f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/deleteMessage",
+                    json={
+                        "chat_id": settings.TELEGRAM_CHANNEL_ID,
+                        "message_id": cluster.tg_channel_message_id
+                    }
+                )
+        except Exception:
+            pass
+
+    # Unlink articles before deleting
+    arts_res = await db.execute(select(Article).where(Article.cluster_id == cluster_id))
+    arts = arts_res.scalars().all()
+    for art in arts:
+        art.cluster_id = None
+        
+    await db.delete(cluster)
+    await db.commit()
+    return {"status": "deleted", "cluster_id": cluster_id}
+
+
+async def load_persisted_settings(db: AsyncSession):
+    """Loads settings stored in the database into memory and active config on startup."""
+    try:
+        res = await db.execute(select(SystemSetting))
+        rows = res.scalars().all()
+        for r in rows:
+            _runtime_settings[r.key] = r.value
+            attr = r.key.upper()
+            if hasattr(settings, attr):
+                setattr(settings, attr, r.value)
+        if rows:
+            import logging
+            logging.getLogger("prism_news").info(f"Loaded {len(rows)} persisted settings from database.")
+    except Exception as e:
+        import logging
+        logging.getLogger("prism_news").warning(f"Could not load settings from DB: {e}")
+
+
 @router.get("/settings")
-async def get_admin_settings():
+async def get_admin_settings(db: AsyncSession = Depends(get_db)):
+    try:
+        res = await db.execute(select(SystemSetting))
+        rows = res.scalars().all()
+        for r in rows:
+            _runtime_settings[r.key] = r.value
+    except Exception:
+        pass
     return _runtime_settings
 
 
 @router.put("/settings")
-async def update_admin_settings(payload: PipelineSettingsSchema):
-    _runtime_settings.update(payload.model_dump())
+async def update_admin_settings(payload: PipelineSettingsSchema, db: AsyncSession = Depends(get_db)):
+    data = payload.model_dump()
+    _runtime_settings.update(data)
+
+    # 1. Update in-memory settings
+    for key, val in data.items():
+        attr = key.upper()
+        if hasattr(settings, attr):
+            setattr(settings, attr, val)
+
+    # 2. Persist to PostgreSQL database (system_settings table)
+    try:
+        for key, val in data.items():
+            res = await db.execute(select(SystemSetting).where(SystemSetting.key == key))
+            existing = res.scalar_one_or_none()
+            if existing:
+                existing.value = val
+                existing.updated_at = datetime.utcnow()
+            else:
+                db.add(SystemSetting(key=key, value=val, updated_at=datetime.utcnow()))
+        await db.commit()
+    except Exception as db_err:
+        import logging
+        logging.getLogger("prism_news").error(f"Failed to persist settings to DB: {db_err}")
+        await db.rollback()
+
+    # 3. Reschedule background jobs dynamically
+    try:
+        from app.services.scheduler import reschedule_jobs
+        reschedule_jobs(
+            parse_minutes=data.get("parse_interval_minutes", settings.PARSE_INTERVAL_MINUTES),
+            llm_minutes=data.get("llm_interval_minutes", settings.LLM_ANALYSIS_INTERVAL_MINUTES)
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger("prism_news").warning(f"Reschedule note: {e}")
+
+    # 4. Also try to persist settings to .env file on server as backup
+    import os
+    env_paths = ["/opt/prism/.env", ".env"]
+    for path in env_paths:
+        try:
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                new_lines = []
+                for line in lines:
+                    line_strip = line.strip()
+                    if "=" in line_strip and not line_strip.startswith("#"):
+                        k = line_strip.split("=", 1)[0].strip()
+                        schema_key = k.lower()
+                        if schema_key in data:
+                            new_lines.append(f"{k}={data[schema_key]}\n")
+                            continue
+                    new_lines.append(line)
+                with open(path, "w", encoding="utf-8") as f:
+                    f.writelines(new_lines)
+                break
+        except Exception:
+            pass
+
     return _runtime_settings
 
 

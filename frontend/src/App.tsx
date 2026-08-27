@@ -4,6 +4,7 @@ import { useTelegram } from './hooks/useTelegram';
 import { useFeed, useUserPreferences, useSources } from './hooks/useFeed';
 import { FeedFilterState, FontFamilyMode, ThemeMode, FontSizeScale, ActiveTab, StoryCluster, NewsSortMode } from './types';
 import { api } from './api/client';
+import { safeStorage } from './utils/storage';
 import { Header } from './components/Header';
 import { StoryCard } from './components/StoryCard';
 import { SortBar } from './components/SortBar';
@@ -31,7 +32,7 @@ export const App: React.FC = () => {
   // Authenticated user state (null by default for guests)
   const [currentUser, setCurrentUser] = useState<any>(() => {
     try {
-      const saved = localStorage.getItem('prism_user');
+      const saved = safeStorage.getItem('prism_user');
       if (saved) return JSON.parse(saved);
       return null;
     } catch {
@@ -50,13 +51,13 @@ export const App: React.FC = () => {
 
   // Theme, Font & Size states
   const [theme, setTheme] = useState<ThemeMode>(() => {
-    return (localStorage.getItem('prism_theme') as ThemeMode) || 'dark';
+    return (safeStorage.getItem('prism_theme') as ThemeMode) || 'dark';
   });
   const [fontFamily, setFontFamily] = useState<FontFamilyMode>(() => {
-    return (localStorage.getItem('prism_font') as FontFamilyMode) || 'sans';
+    return (safeStorage.getItem('prism_font') as FontFamilyMode) || 'sans';
   });
   const [fontSize, setFontSize] = useState<FontSizeScale>(() => {
-    return (localStorage.getItem('prism_font_size') as FontSizeScale) || 'base';
+    return (safeStorage.getItem('prism_font_size') as FontSizeScale) || 'base';
   });
 
   const [filters, setFilters] = useState<FeedFilterState>({
@@ -80,21 +81,21 @@ export const App: React.FC = () => {
       root.classList.add('light');
       root.classList.remove('dark');
     }
-    localStorage.setItem('prism_theme', theme);
+    safeStorage.setItem('prism_theme', theme);
   }, [theme]);
 
   useEffect(() => {
     const body = document.body;
     body.classList.remove('font-sans-mode', 'font-serif-mode', 'font-mono-mode');
     body.classList.add(`font-${fontFamily}-mode`);
-    localStorage.setItem('prism_font', fontFamily);
+    safeStorage.setItem('prism_font', fontFamily);
   }, [fontFamily]);
 
   useEffect(() => {
     const body = document.body;
     body.classList.remove('text-size-sm', 'text-size-base', 'text-size-lg');
     body.classList.add(`text-size-${fontSize}`);
-    localStorage.setItem('prism_font_size', fontSize);
+    safeStorage.setItem('prism_font_size', fontSize);
   }, [fontSize]);
 
   const toggleTheme = () => {
@@ -118,9 +119,9 @@ export const App: React.FC = () => {
         .then((res) => {
           if (res?.user) {
             setCurrentUser(res.user);
-            localStorage.setItem('prism_user', JSON.stringify(res.user));
+            safeStorage.setItem('prism_user', JSON.stringify(res.user));
             if (res.access_token) {
-              localStorage.setItem('prism_auth_token', res.access_token);
+              safeStorage.setItem('prism_auth_token', res.access_token);
             }
           }
         })
@@ -128,12 +129,12 @@ export const App: React.FC = () => {
           console.warn('Telegram auth warning:', err);
           if (user && user.id) {
             setCurrentUser(user);
-            localStorage.setItem('prism_user', JSON.stringify(user));
+            safeStorage.setItem('prism_user', JSON.stringify(user));
           }
         });
     } else if (user && user.id) {
       setCurrentUser(user);
-      localStorage.setItem('prism_user', JSON.stringify(user));
+      safeStorage.setItem('prism_user', JSON.stringify(user));
     }
   }, [initData, user]);
 
@@ -329,8 +330,8 @@ export const App: React.FC = () => {
             onOpenAuthModal={() => setIsAuthOpen(true)}
             onOpenAdminModal={() => setIsAdminOpen(true)}
             onLogout={() => {
-              localStorage.removeItem('prism_user');
-              localStorage.removeItem('prism_auth_token');
+              safeStorage.removeItem('prism_user');
+              safeStorage.removeItem('prism_auth_token');
               setCurrentUser(null);
             }}
             fontFamily={fontFamily}
@@ -383,6 +384,11 @@ export const App: React.FC = () => {
                   onOpenComments={(s) => setActiveCommentStory(s)}
                   onToggleFavoriteGlobal={handleToggleFavoriteGlobal}
                   onOpenMediaDossier={(name) => setSelectedDossierMedia(name)}
+                  currentUser={currentUser}
+                  onDeleteStory={() => {
+                    triggerSync();
+                    handleToggleFavoriteGlobal();
+                  }}
                 />
               ))}
           </div>
@@ -473,6 +479,11 @@ export const App: React.FC = () => {
                     onOpenComments={(s) => setActiveCommentStory(s)}
                     onToggleFavoriteGlobal={handleToggleFavoriteGlobal}
                     onOpenMediaDossier={(name) => setSelectedDossierMedia(name)}
+                    currentUser={currentUser}
+                    onDeleteStory={() => {
+                      triggerSync();
+                      handleToggleFavoriteGlobal();
+                    }}
                   />
                 ))}
               </div>
@@ -587,8 +598,8 @@ export const App: React.FC = () => {
         currentUser={currentUser}
         onLoginSuccess={(u) => setCurrentUser(u)}
         onLogout={() => {
-          localStorage.removeItem('prism_user');
-          localStorage.removeItem('prism_auth_token');
+          safeStorage.removeItem('prism_user');
+          safeStorage.removeItem('prism_auth_token');
           setCurrentUser(null);
         }}
       />

@@ -135,7 +135,9 @@ class TelegramChannelBotService:
             btn["icon_custom_emoji_id"] = str(self.emoji_id)
         reply_markup = {"inline_keyboard": [[btn]]}
 
-        images = [u for u in (media_urls or []) if u and u.startswith("http")]
+        # Deduplicate candidate image URLs preserving order
+        raw_images = [u for u in (media_urls or []) if u and u.startswith("http")]
+        images = list(dict.fromkeys(raw_images))
 
         for attempt in range(1, 3):
             try:

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, LogOut, CheckCircle2, Loader2, ExternalLink, Copy, Check, Sparkles, MessageSquare } from 'lucide-react';
 import { useTelegram } from '../hooks/useTelegram';
 import { api } from '../api/client';
+import { safeStorage } from '../utils/storage';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -29,7 +30,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       api.authenticateTelegram(initData)
         .then((res) => {
           if (res?.user) {
-            localStorage.setItem('prism_user', JSON.stringify(res.user));
+            safeStorage.setItem('prism_user', JSON.stringify(res.user));
             onLoginSuccess(res.user);
           }
         })
@@ -68,9 +69,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             const res = await api.checkAuthSession(sessionData.session_id || '', sessionData.code);
             if (res?.status === 'authenticated' && res.user) {
               haptic('success');
-              localStorage.setItem('prism_user', JSON.stringify(res.user));
+              safeStorage.setItem('prism_user', JSON.stringify(res.user));
               if (res.access_token) {
-                localStorage.setItem('prism_auth_token', res.access_token);
+                safeStorage.setItem('prism_auth_token', res.access_token);
               }
               onLoginSuccess(res.user);
               onClose();

@@ -72,6 +72,36 @@ def normalize_category(cat: Optional[str]) -> str:
     return "Политика"
 
 
+def is_near_duplicate_text(t1: str, t2: str, c1: str = "", c2: str = "") -> bool:
+    t1_clean = t1.strip().lower()
+    t2_clean = t2.strip().lower()
+    if not t1_clean or not t2_clean:
+        return False
+    if t1_clean == t2_clean:
+        return True
+    if len(t1_clean) > 20 and len(t2_clean) > 20:
+        if t1_clean in t2_clean or t2_clean in t1_clean:
+            return True
+    w1 = set(t1_clean.split())
+    w2 = set(t2_clean.split())
+    if w1 and w2:
+        jaccard = len(w1 & w2) / len(w1 | w2)
+        if jaccard >= 0.75:
+            return True
+    return False
+
+
+def cosine_sim(v1: List[float], v2: List[float]) -> float:
+    if not v1 or not v2:
+        return 0.0
+    dot = sum(a * b for a, b in zip(v1, v2))
+    n1 = sum(a * a for a in v1) ** 0.5
+    n2 = sum(b * b for b in v2) ** 0.5
+    if n1 > 0 and n2 > 0:
+        return dot / (n1 * n2)
+    return 0.0
+
+
 class NewsPipeline:
     def __init__(self):
         self.parser = NewsParser()
@@ -140,8 +170,9 @@ class NewsPipeline:
         """
         Stage 1 & 2:
         1. Ingests raw news items from active RSS and Telegram sources via SOCKS5 proxy.
-        2. Cleans text and generates vector embeddings for title + first paragraph.
-        3. Saves newly vectorized articles to the database with media attachments.
+        2. Applies intelligent intra-source and near-duplicate deduplication.
+        3. Cleans text and generates vector embeddings for title + first paragraph.
+        4. Saves newly vectorized articles to the database with media attachments.
         """
         logger.info("Starting News Ingestion & Vectorization Task (via SOCKS5 proxy)...")
         await self.seed_default_sources(db)
@@ -157,7 +188,6 @@ class NewsPipeline:
                 if source.feed_type == FeedType.RSS:
                     rss_items = await self.parser.fetch_rss_feed(source.url)
                     for item in rss_items:
-                        # Check if article already exists
                         existing = await db.execute(select(Article.id).where(Article.url == item["url"]))
                         if existing.first():
                             continue
@@ -183,10 +213,66 @@ class NewsPipeline:
                             continue
                         raw_articles.append(item)
 
+                # Intra-batch deduplication (e.g. 2 rapid posts in same telegram channel)
+                deduped_batch = []
+                for art in raw_articles:
+                    is_dup = False
+                    for kept in deduped_batch:
+                        if is_near_duplicate_text(art["title"], kept["title"], art.get("clean_content", ""), kept.get("clean_content", "")):
+                            if len(art.get("clean_content", "")) > len(kept.get("clean_content", "")):
+                                kept["clean_content"] = art["clean_content"]
+                                kept["title"] = art["title"]
+                            if not kept.get("media_url") and art.get("media_url"):
+                                kept["media_url"] = art["media_url"]
+                            is_dup = True
+                            break
+                    if not is_dup:
+                        deduped_batch.append(art)
+
+                # Query recent articles from DB for this source in the last 6 hours
+                recent_cutoff = datetime.utcnow() - timedelta(hours=6)
+                recent_res = await db.execute(
+                    select(Article).where(
+                        and_(Article.source_id == source.id, Article.published_at >= recent_cutoff)
+                    ).order_by(Article.published_at.desc())
+                )
+                recent_source_articles = list(recent_res.scalars().all())
+
                 # Process and vectorize new articles
-                for art_data in raw_articles:
+                for art_data in deduped_batch:
+                    # 1. Lexical / prefix duplicate check against recent source articles
+                    lex_dup = False
+                    for existing_art in recent_source_articles:
+                        if is_near_duplicate_text(art_data["title"], existing_art.title, art_data.get("clean_content", ""), existing_art.clean_content or ""):
+                            if len(art_data.get("clean_content", "")) > len(existing_art.clean_content or ""):
+                                existing_art.clean_content = art_data["clean_content"]
+                                existing_art.title = art_data["title"]
+                            if not existing_art.media_url and art_data.get("media_url"):
+                                existing_art.media_url = art_data["media_url"]
+                            lex_dup = True
+                            break
+                    if lex_dup:
+                        continue
+
+                    # 2. Vectorize
                     embed_text = TextCleaner.extract_embedding_text(art_data["title"], art_data["clean_content"])
                     embedding = await ai_service.get_embedding(embed_text)
+
+                    # 3. Vector duplicate check against recent articles of same source
+                    vec_dup = False
+                    for existing_art in recent_source_articles:
+                        if existing_art.embedding:
+                            sim = cosine_sim(embedding, existing_art.embedding)
+                            if sim >= 0.82:
+                                if len(art_data.get("clean_content", "")) > len(existing_art.clean_content or ""):
+                                    existing_art.clean_content = art_data["clean_content"]
+                                    existing_art.title = art_data["title"]
+                                if not existing_art.media_url and art_data.get("media_url"):
+                                    existing_art.media_url = art_data["media_url"]
+                                vec_dup = True
+                                break
+                    if vec_dup:
+                        continue
 
                     new_article = Article(
                         source_id=source.id,
@@ -199,6 +285,7 @@ class NewsPipeline:
                         media_url=art_data.get("media_url")
                     )
                     db.add(new_article)
+                    recent_source_articles.append(new_article)
                     total_saved += 1
 
                 await db.commit()
@@ -226,11 +313,12 @@ class NewsPipeline:
         logger.info("Starting Clustering & LLM Analysis Task...")
         cutoff_time = datetime.utcnow() - timedelta(hours=max(48, settings.LOOKBACK_HOURS * 2))
 
-        # Find all unclustered articles with valid embeddings
+        # Find all unclustered articles with valid embeddings in the last lookback window
         query = select(Article).options(selectinload(Article.source)).where(
             and_(
                 Article.cluster_id.is_(None),
-                Article.embedding.isnot(None)
+                Article.embedding.isnot(None),
+                Article.published_at >= cutoff_time
             )
         ).order_by(Article.published_at.desc())
 
@@ -291,6 +379,18 @@ class NewsPipeline:
                 cluster.sources_count = sources_count
                 cluster.article_count = len(cluster_articles)
 
+                # Cap at up to 8 representative articles to prevent token explosions
+                sampled_articles = []
+                seen_sources = set()
+                for a in cluster_articles:
+                    if a.source_id not in seen_sources or len(sampled_articles) < 4:
+                        seen_sources.add(a.source_id)
+                        sampled_articles.append(a)
+                    if len(sampled_articles) >= 8:
+                        break
+                if not sampled_articles:
+                    sampled_articles = cluster_articles[:8]
+
                 article_dicts = [
                     {
                         "title": a.title,
@@ -298,7 +398,7 @@ class NewsPipeline:
                         "source_name": a.source.name if a.source else "СМИ",
                         "clean_content": a.clean_content or a.title
                     }
-                    for a in cluster_articles
+                    for a in sampled_articles
                 ]
 
                 # Synthesize fresh multi-source analytical card
@@ -307,6 +407,8 @@ class NewsPipeline:
                 cluster.summary = story_card.summary
                 cluster.category = normalize_category(story_card.category)
                 cluster.sentiment = story_card.sentiment
+                cluster.importance_score = getattr(story_card, "importance_score", cluster.importance_score) or 7
+                cluster.importance_reason = getattr(story_card, "importance_reason", cluster.importance_reason)
                 cluster.political_vectors = [v.model_dump() for v in story_card.political_vectors]
                 cluster.quotes = [q.model_dump() for q in story_card.quotes]
                 cluster.verified_facts = story_card.verified_facts
@@ -334,52 +436,103 @@ class NewsPipeline:
             except Exception as update_err:
                 logger.error(f"Error re-synthesizing updated cluster #{cid}: {update_err}")
 
-        # Step 2: Group remaining unclustered articles amongst each other
+        # Step 2: Transitive Graph Grouping (BFS Connected Components) of remaining unclustered articles
         clusters_to_create: List[List[Article]] = []
         visited = set()
+        sim_threshold = getattr(settings, "SIMILARITY_THRESHOLD", 0.52)
+        n = len(remaining_articles)
 
-        for i, art1 in enumerate(remaining_articles):
-            if i in visited:
-                continue
-            group = [art1]
-            visited.add(i)
-
-            vec1 = art1.embedding
+        # Build adjacency graph
+        adj: Dict[int, List[int]] = {idx: [] for idx in range(n)}
+        for i in range(n):
+            vec1 = remaining_articles[i].embedding
             if vec1 is None:
                 continue
+            norm1 = sum(a * a for a in vec1) ** 0.5
+            if norm1 <= 0:
+                continue
 
-            for j in range(i + 1, len(remaining_articles)):
-                if j in visited:
-                    continue
-                art2 = remaining_articles[j]
-                vec2 = art2.embedding
+            for j in range(i + 1, n):
+                vec2 = remaining_articles[j].embedding
                 if vec2 is None:
                     continue
-
-                # Cosine similarity calculation
-                dot_prod = sum(a * b for a, b in zip(vec1, vec2))
-                norm1 = sum(a * a for a in vec1) ** 0.5
                 norm2 = sum(b * b for b in vec2) ** 0.5
-                sim = dot_prod / (norm1 * norm2) if norm1 > 0 and norm2 > 0 else 0.0
+                if norm2 <= 0:
+                    continue
 
-                if sim >= settings.SIMILARITY_THRESHOLD:
-                    group.append(art2)
-                    visited.add(j)
+                dot_prod = sum(a * b for a, b in zip(vec1, vec2))
+                sim = dot_prod / (norm1 * norm2)
+                if sim >= sim_threshold:
+                    adj[i].append(j)
+                    adj[j].append(i)
 
-            clusters_to_create.append(group)
+        # Extract connected components (guarantees related articles are never split)
+        for i in range(n):
+            if i in visited:
+                continue
+            component = []
+            queue = [i]
+            visited.add(i)
+            while queue:
+                curr = queue.pop(0)
+                component.append(remaining_articles[curr])
+                for neighbor in adj[curr]:
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        queue.append(neighbor)
+            clusters_to_create.append(component)
 
         # Step 3: Process clusters with size limit & Cheap LLM filter
+        created_count = 0
+        MAX_STORIES_PER_BATCH = 10
+
+        # Fetch recent existing StoryClusters in lookback window for cluster-level duplicate avoidance
+        recent_clusters_res = await db.execute(
+            select(StoryCluster).where(StoryCluster.created_at >= cutoff_time).order_by(StoryCluster.created_at.desc())
+        )
+        recent_clusters = list(recent_clusters_res.scalars().all())
+
         for group in clusters_to_create:
+            if created_count >= MAX_STORIES_PER_BATCH:
+                logger.info(f"Reached batch synthesis limit ({MAX_STORIES_PER_BATCH} stories per run). Remaining will be processed on next schedule.")
+                break
+
             # Rule 1: Cluster Size Constraint — Minimum 2 independent sources
             unique_source_ids = set(art.source_id for art in group if art.source_id is not None)
-            if len(unique_source_ids) < 2 and len(group) < 2:
+            if len(unique_source_ids) < 2:
                 logger.info(f"Skipping single-source cluster '{group[0].title[:50]}...' (requires >= 2 independent sources). Waiting for further coverage.")
                 continue
 
-            try:
-                # Prepare payload for LLM
-                articles_payload = []
+            # Check if any article in this group matches an existing cluster created in the last 48h
+            matched_cid = None
+            for g_art in group:
+                if g_art.embedding:
+                    matched_cid = await clustering_service.find_matching_cluster(db, g_art.embedding, cutoff_time)
+                    if matched_cid:
+                        break
+
+            # Also check lexical / text similarity with recent existing cluster titles
+            if not matched_cid and recent_clusters:
+                for existing_c in recent_clusters:
+                    for g_art in group:
+                        if is_near_duplicate_text(g_art.title, existing_c.title):
+                            matched_cid = existing_c.id
+                            break
+                    if matched_cid:
+                        break
+
+            if matched_cid:
+                logger.info(f"Group '{group[0].title[:50]}...' merged into existing cluster #{matched_cid} instead of creating duplicate.")
                 for art in group:
+                    art.cluster_id = matched_cid
+                clusters_to_update.add(matched_cid)
+                await db.commit()
+                continue
+
+            try:
+                # Prepare payload for LLM (capped at 8 articles to prevent oversized context)
+                articles_payload = []
+                for art in group[:8]:
                     source_name = art.source.name if art.source else "Новостной источник"
                     articles_payload.append({
                         "title": art.title,
@@ -389,27 +542,38 @@ class NewsPipeline:
                     })
 
                 # Rule 2: Preliminary Cheap LLM Filter (CHEAP_LLM_MODEL)
-                is_important = await ai_service.filter_cluster_importance(articles_payload)
+                is_important, imp_score, imp_reason = await ai_service.filter_cluster_importance(articles_payload)
                 if not is_important:
-                    logger.info(f"Cluster '{group[0].title[:50]}...' discarded by cheap LLM filter as petty/unimportant.")
+                    logger.info(f"Cluster '{group[0].title[:50]}...' discarded by cheap LLM filter (score={imp_score}/10, reason: '{imp_reason}').")
                     continue
 
                 # Rule 3: Heavy LLM Analytical Card Generation (LLM_MODEL)
                 ai_card = await ai_service.generate_story_card(articles_payload)
+                if not ai_card:
+                    logger.warning(f"LLM generation returned None for cluster '{group[0].title[:50]}...'. Skipping.")
+                    continue
 
-                # Extract photos / media from articles
+                created_count += 1
+
+                # Extract photos / media from articles (deduplicating URLs)
                 cluster_media = []
+                seen_media_urls = set()
                 for art in group:
                     if getattr(art, "media_url", None) and str(art.media_url).startswith("http"):
-                        cluster_media.append({
-                            "type": "image",
-                            "url": art.media_url,
-                            "caption": art.title,
-                            "source_name": art.source.name if art.source else "Первоисточник"
-                        })
+                        if art.media_url not in seen_media_urls:
+                            seen_media_urls.add(art.media_url)
+                            cluster_media.append({
+                                "type": "image",
+                                "url": art.media_url,
+                                "caption": art.title,
+                                "source_name": art.source.name if art.source else "Первоисточник"
+                            })
 
-                # Persist StoryCluster with sources_count
+                # Persist StoryCluster with sources_count and AI importance
                 sources_count = max(1, len(unique_source_ids))
+                cluster_imp_score = getattr(ai_card, "importance_score", None) or imp_score or 7
+                cluster_imp_reason = getattr(ai_card, "importance_reason", None) or imp_reason
+
                 cluster = StoryCluster(
                     title=ai_card.title,
                     summary=ai_card.summary,
@@ -417,6 +581,8 @@ class NewsPipeline:
                     category=normalize_category(getattr(ai_card, "category", "Политика")),
                     consensus_score=getattr(ai_card, "consensus_score", 80) or 80,
                     polarization_score=getattr(ai_card, "polarization_score", 30) or 30,
+                    importance_score=cluster_imp_score,
+                    importance_reason=cluster_imp_reason,
                     media=cluster_media[:5],
                     timeline=[t.model_dump() for t in getattr(ai_card, "timeline", [])] if getattr(ai_card, "timeline", None) else [],
                     political_vectors=[v.model_dump() for v in ai_card.political_vectors],
@@ -435,6 +601,7 @@ class NewsPipeline:
                     art.cluster_id = cluster.id
 
                 await db.commit()
+                recent_clusters.append(cluster)
                 logger.info(f"Created StoryCluster #{cluster.id}: '{cluster.title}' with {len(group)} articles from {sources_count} sources and {len(cluster_media)} images.")
 
                 # Auto-post to Telegram Channel

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Newspaper, ExternalLink, ChevronDown, Layers, Sparkles, Share2, Check, Clock, ShieldCheck, Zap, MessageCircle, Bookmark, Heart, ThumbsUp, Info } from 'lucide-react';
+import { Newspaper, ExternalLink, ChevronDown, Layers, Sparkles, Share2, Check, Clock, ShieldCheck, Zap, MessageCircle, Bookmark, Heart, ThumbsUp, Info, Trash2 } from 'lucide-react';
 import { StoryCluster, ReactionSummary } from '../types';
 import { SentimentGauge } from './SentimentGauge';
 import { PoliticalSpectrum } from './PoliticalSpectrum';
@@ -16,6 +16,8 @@ interface StoryCardProps {
   onOpenComments?: (story: StoryCluster) => void;
   onToggleFavoriteGlobal?: (storyId: number) => void;
   onOpenMediaDossier?: (mediaName: string) => void;
+  currentUser?: any;
+  onDeleteStory?: (storyId: number) => void;
 }
 
 export const StoryCard: React.FC<StoryCardProps> = ({
@@ -24,6 +26,8 @@ export const StoryCard: React.FC<StoryCardProps> = ({
   onOpenComments,
   onToggleFavoriteGlobal,
   onOpenMediaDossier,
+  currentUser,
+  onDeleteStory,
 }) => {
   const { haptic, openLink } = useTelegram();
   const [isExpanded, setIsExpanded] = useState(false);
@@ -36,7 +40,14 @@ export const StoryCard: React.FC<StoryCardProps> = ({
     story.reactions || { like: 0, thumb_up: 0, objective: 0, fire: 0, fact: 0, user_reaction: null }
   );
 
-  const formattedDate = new Date(story.created_at).toLocaleDateString('ru-RU', {
+  const parseIsoDate = (d: string | Date | undefined | null) => {
+    if (!d) return new Date();
+    if (d instanceof Date) return d;
+    const str = String(d);
+    return new Date(str.endsWith('Z') || str.includes('+') ? str : str + 'Z');
+  };
+
+  const formattedDate = parseIsoDate(story.created_at).toLocaleDateString('ru-RU', {
     day: 'numeric',
     month: 'short',
     hour: '2-digit',
@@ -91,6 +102,27 @@ export const StoryCard: React.FC<StoryCardProps> = ({
     }
   };
 
+  const isAdmin =
+    currentUser?.username?.toLowerCase() === 'not_hleb' ||
+    currentUser?.is_admin ||
+    currentUser?.telegram_id === 6541226081 ||
+    currentUser?.id === 1;
+
+  const handleDeleteStory = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (window.confirm(`Удалить сюжет "${story.title}" из ленты и сайта?`)) {
+      haptic('warning');
+      try {
+        await api.deleteAdminCluster(story.id);
+        if (onDeleteStory) {
+          onDeleteStory(story.id);
+        }
+      } catch (err) {
+        console.error('Failed to delete story:', err);
+      }
+    }
+  };
+
   return (
     <article
       id={`story-card-${story.id}`}
@@ -116,8 +148,35 @@ export const StoryCard: React.FC<StoryCardProps> = ({
           </span>
         </div>
 
-        {/* Right: Consensus / Polarization Badge */}
-        <div>
+        {/* Right: Consensus / Polarization Badge & Admin Action */}
+        <div className="flex items-center space-x-1.5">
+          {isAdmin && story.importance_score !== undefined && (
+            <span
+              className={`px-2 py-0.5 rounded-lg text-[10px] font-bold flex items-center space-x-1 border cursor-help ${
+                story.importance_score >= 8
+                  ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/30'
+                  : story.importance_score >= 6
+                  ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30'
+                  : 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/30'
+              }`}
+              title={story.importance_reason ? `Обоснование ИИ: ${story.importance_reason}` : `Оценка значимости ИИ: ${story.importance_score}/10`}
+            >
+              <Sparkles className="w-3 h-3" />
+              <span>ИИ: {story.importance_score}/10</span>
+            </span>
+          )}
+
+          {isAdmin && (
+            <button
+              onClick={handleDeleteStory}
+              className="px-2 py-0.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/25 text-[10px] font-bold flex items-center space-x-1 transition-all active:scale-95 shadow-sm"
+              title="Удалить этот сюжет (Администратор)"
+            >
+              <Trash2 className="w-3 h-3" />
+              <span>Удалить</span>
+            </button>
+          )}
+
           {story.consensus_score && story.consensus_score >= 70 ? (
             <span className="px-2 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20 text-[10px] font-bold flex items-center space-x-1">
               <ShieldCheck className="w-3 h-3" />

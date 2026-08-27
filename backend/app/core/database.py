@@ -76,6 +76,8 @@ async def init_db():
                     "ALTER TABLE story_clusters ADD COLUMN IF NOT EXISTS consensus_score INTEGER DEFAULT 80;",
                     "ALTER TABLE story_clusters ADD COLUMN IF NOT EXISTS polarization_score INTEGER DEFAULT 30;",
                     "ALTER TABLE story_clusters ADD COLUMN IF NOT EXISTS sources_count INTEGER DEFAULT 1;",
+                    "ALTER TABLE story_clusters ADD COLUMN IF NOT EXISTS importance_score INTEGER DEFAULT 7;",
+                    "ALTER TABLE story_clusters ADD COLUMN IF NOT EXISTS importance_reason VARCHAR(512);",
                 ]
                 for q in pg_alter_queries:
                     try:
@@ -96,6 +98,8 @@ async def init_db():
                     ("category", "VARCHAR(100) DEFAULT 'Политика' NOT NULL"),
                     ("consensus_score", "INTEGER DEFAULT 80 NOT NULL"),
                     ("polarization_score", "INTEGER DEFAULT 30 NOT NULL"),
+                    ("importance_score", "INTEGER DEFAULT 7 NOT NULL"),
+                    ("importance_reason", "VARCHAR(512)"),
                     ("media", "JSON DEFAULT '[]' NOT NULL"),
                     ("timeline", "JSON DEFAULT '[]' NOT NULL"),
                     ("tg_channel_message_id", "BIGINT"),

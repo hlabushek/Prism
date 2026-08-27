@@ -20,10 +20,10 @@ class Settings(BaseSettings):
     ROUTERAI_API_KEY: str = "sk-S6nOQgQOO7RfoTwWXMWHAjyGXH8kiXxu"
     ROUTERAI_BASE_URL: str = "https://routerai.ru/api/v1"
     
-    # AI Models Architecture (Primary: z-ai/glm-5.3-flash with 3 retries, Fallback: openai/gpt-4o-mini)
+    # AI Models Architecture (Primary: deepseek/deepseek-v4-flash-0731, Fallback: openai/gpt-4o-mini)
     EMBEDDING_MODEL: str = "openai/text-embedding-3-small"
-    CHEAP_LLM_MODEL: str = "z-ai/glm-5.3-flash"
-    LLM_MODEL: str = "z-ai/glm-5.3-flash"
+    CHEAP_LLM_MODEL: str = "deepseek/deepseek-v4-flash-0731"
+    LLM_MODEL: str = "deepseek/deepseek-v4-flash-0731"
     FALLBACK_LLM_MODEL: str = "openai/gpt-4o-mini"
     EMBEDDING_DIMENSION: int = 1536
     IMPORTANCE_THRESHOLD: int = 6

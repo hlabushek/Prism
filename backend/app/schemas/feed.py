@@ -42,6 +42,8 @@ class StoryClusterResponse(BaseModel):
     category: Optional[str] = "Политика"
     consensus_score: Optional[int] = 80
     polarization_score: Optional[int] = 30
+    importance_score: Optional[int] = 7
+    importance_reason: Optional[str] = None
     media: Optional[List[MediaItemSchema]] = Field(default_factory=list)
     timeline: Optional[List[TimelineEventSchema]] = Field(default_factory=list)
     political_vectors: List[PoliticalVectorItem]

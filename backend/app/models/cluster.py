@@ -16,6 +16,10 @@ class StoryCluster(Base):
     consensus_score = Column(Integer, default=80, nullable=False)
     polarization_score = Column(Integer, default=30, nullable=False)
     
+    # AI Importance Rating (1 to 10) & Reasoning
+    importance_score = Column(Integer, default=7, nullable=False)
+    importance_reason = Column(String(512), nullable=True)
+    
     # Media & Timelines
     media = Column(JSON, nullable=False, default=list)
     timeline = Column(JSON, nullable=False, default=list)

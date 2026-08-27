@@ -32,6 +32,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Default sources seeding note: {e}")
 
+    # Load persisted settings from database
+    try:
+        from app.api.routes.admin import load_persisted_settings
+        async with AsyncSessionLocal() as session:
+            await load_persisted_settings(session)
+    except Exception as e:
+        logger.warning(f"Settings loading note: {e}")
+
     # Start APScheduler with configured intervals
     start_scheduler()
 

@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { FeedFilterState, FeedResponse, NewsSource, User, UserPreferences, StoryCluster, CommentItem, ReactionSummary } from '../types';
+import { safeStorage } from '../utils/storage';
 
 const getBaseUrl = (): string => {
   const envUrl = (import.meta as any).env?.VITE_API_URL;
@@ -23,7 +24,7 @@ export const apiClient = axios.create({
 });
 
 apiClient.interceptors.request.use((config) => {
-  const token = localStorage.getItem('prism_auth_token');
+  const token = safeStorage.getItem('prism_auth_token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -44,7 +45,7 @@ export const api = {
   authenticateTelegram: async (initData: string): Promise<{ access_token: string; user: User }> => {
     const response = await apiClient.post('/auth/telegram', { init_data: initData });
     if (response.data?.access_token) {
-      localStorage.setItem('prism_auth_token', response.data.access_token);
+      safeStorage.setItem('prism_auth_token', response.data.access_token);
     }
     return response.data;
   },
@@ -77,7 +78,7 @@ export const api = {
         try {
           const byCode = await apiClient.get(`/auth/session/code/${code}`);
           if (byCode.data?.status === 'authenticated' && byCode.data.user) {
-            if (byCode.data.access_token) localStorage.setItem('prism_auth_token', byCode.data.access_token);
+            if (byCode.data.access_token) safeStorage.setItem('prism_auth_token', byCode.data.access_token);
             return byCode.data;
           }
         } catch {}
@@ -88,7 +89,7 @@ export const api = {
         const response = await apiClient.get(`/auth/session/${sessionId}`);
         if (response.data?.status === 'authenticated' && response.data.user) {
           if (response.data.access_token) {
-            localStorage.setItem('prism_auth_token', response.data.access_token);
+            safeStorage.setItem('prism_auth_token', response.data.access_token);
           }
           return response.data;
         }
@@ -280,6 +281,33 @@ export const api = {
     }
   },
 
+  getAdminClusters: async (params?: {
+    page?: number;
+    page_size?: number;
+    search?: string;
+    category?: string;
+    min_importance?: number;
+  }): Promise<{
+    items: import('../types').AdminClusterItem[];
+    total: number;
+    page: number;
+    page_size: number;
+    total_pages: number;
+  }> => {
+    try {
+      const response = await apiClient.get('/admin/clusters', { params });
+      return response.data;
+    } catch {
+      return {
+        items: [],
+        total: 0,
+        page: params?.page || 1,
+        page_size: params?.page_size || 20,
+        total_pages: 1,
+      };
+    }
+  },
+
   getAdminSettings: async () => {
     try {
       const response = await apiClient.get('/admin/settings');
@@ -337,6 +365,16 @@ export const api = {
 
   deleteAdminSource: async (sourceId: number): Promise<{ status: string }> => {
     const response = await apiClient.delete<{ status: string }>(`/admin/sources/${sourceId}`);
+    return response.data;
+  },
+
+  deleteAdminArticle: async (articleId: number): Promise<{ status: string }> => {
+    const response = await apiClient.delete<{ status: string }>(`/admin/articles/${articleId}`);
+    return response.data;
+  },
+
+  deleteAdminCluster: async (clusterId: number): Promise<{ status: string }> => {
+    const response = await apiClient.delete<{ status: string }>(`/admin/clusters/${clusterId}`);
     return response.data;
   },
 

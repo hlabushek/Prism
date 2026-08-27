@@ -20,6 +20,8 @@ class AIStoryCardResponse(BaseModel):
     summary: str = Field(..., description="Нейтральная выжимка основных проверенных фактов без оценочных суждений")
     category: str = Field(default="Политика", description="Категория инфоповода: строго одна из 'Политика', 'Экономика', 'ВПК', 'Технологии', 'В мире', 'Общество'")
     sentiment: float = Field(..., ge=-1.0, le=1.0, description="Общая оценка тональности события от -1.0 (крайне негативная/катастрофическая) до 1.0 (крайне позитивная/триумфальная), 0.0 - нейтральная")
+    importance_score: int = Field(default=7, ge=1, le=10, description="Оценка общественной/геополитической значимости инфоповода от 1 (рутина/мелочь) до 10 (историческое/критическое событие)")
+    importance_reason: Optional[str] = Field(None, description="Краткое экспертное обоснование значимости (1 предложение)")
     political_vectors: List[PoliticalVectorItem] = Field(..., description="Массив из 5 политических лагерей и их позиций")
     quotes: List[QuoteItem] = Field(default_factory=list, description="Массив прямых цитат с привязкой к оригинальному URL")
     verified_facts: List[str] = Field(default_factory=list, description="Список фактов, упомянутых минимум двумя независимыми лагерями")

@@ -13,8 +13,16 @@ logger = logging.getLogger(__name__)
 
 class ClusteringService:
     def __init__(self, similarity_threshold: float = None, lookback_hours: int = None):
-        self.threshold = similarity_threshold or settings.SIMILARITY_THRESHOLD
-        self.lookback_hours = lookback_hours or settings.LOOKBACK_HOURS
+        self._threshold = similarity_threshold
+        self._lookback_hours = lookback_hours
+
+    @property
+    def threshold(self) -> float:
+        return self._threshold or getattr(settings, "SIMILARITY_THRESHOLD", 0.52)
+
+    @property
+    def lookback_hours(self) -> int:
+        return self._lookback_hours or getattr(settings, "LOOKBACK_HOURS", 48)
 
     async def find_matching_cluster(
         self,

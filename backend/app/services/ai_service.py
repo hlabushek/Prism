@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import httpx
 import numpy as np
 from app.core.config import settings
@@ -17,12 +17,27 @@ class AIService:
         if url.endswith("/v1") and not url.endswith("/api/v1"):
             url = url.replace("/v1", "/api/v1")
         self.base_url = url
-        self.api_key = settings.ROUTERAI_API_KEY
-        self.embedding_model = settings.EMBEDDING_MODEL
-        self.cheap_llm_model = settings.CHEAP_LLM_MODEL
-        self.llm_model = settings.LLM_MODEL
-        self.fallback_llm_model = getattr(settings, "FALLBACK_LLM_MODEL", "openai/gpt-4o-mini")
         self.timeout = 60.0
+
+    @property
+    def api_key(self) -> str:
+        return getattr(settings, "ROUTERAI_API_KEY", "")
+
+    @property
+    def embedding_model(self) -> str:
+        return getattr(settings, "EMBEDDING_MODEL", "openai/text-embedding-3-small")
+
+    @property
+    def cheap_llm_model(self) -> str:
+        return getattr(settings, "CHEAP_LLM_MODEL", "deepseek/deepseek-v4-flash-0731")
+
+    @property
+    def llm_model(self) -> str:
+        return getattr(settings, "LLM_MODEL", "deepseek/deepseek-v4-flash-0731")
+
+    @property
+    def fallback_llm_model(self) -> str:
+        return getattr(settings, "FALLBACK_LLM_MODEL", "openai/gpt-4o-mini")
 
     @property
     def headers(self) -> Dict[str, str]:
@@ -57,6 +72,45 @@ class AIService:
         except Exception:
             return None
 
+    async def record_token_usage(
+        self,
+        stage: str,
+        model_name: str,
+        prompt_tokens: int,
+        completion_tokens: int
+    ):
+        total_tokens = prompt_tokens + completion_tokens
+        if total_tokens <= 0:
+            return
+
+        # Cost formula in RUB (based on ~92 RUB/USD and RouterAI/OpenAI standard per-1k rates)
+        if stage == "embedding":
+            # $0.00002 / 1k tokens -> ~0.00184 RUB / 1k tokens
+            cost_rub = (total_tokens / 1000.0) * 0.00184
+        elif stage == "cheap_filter":
+            # $0.05 / 1M prompt ($0.00005/1k) + $0.15 / 1M completion ($0.00015/1k)
+            cost_rub = (prompt_tokens / 1000.0) * 0.0046 + (completion_tokens / 1000.0) * 0.0138
+        else:  # story_synthesis
+            # $0.14 / 1M prompt ($0.00014/1k) + $0.28 / 1M completion ($0.00028/1k)
+            cost_rub = (prompt_tokens / 1000.0) * 0.0128 + (completion_tokens / 1000.0) * 0.0257
+
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.models.ai_usage import AITokenUsage
+            async with AsyncSessionLocal() as session:
+                entry = AITokenUsage(
+                    stage=stage,
+                    model_name=model_name,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    estimated_cost_rub=round(cost_rub, 6)
+                )
+                session.add(entry)
+                await session.commit()
+        except Exception as e:
+            logger.debug(f"Note recording token usage: {e}")
+
     async def _call_llm_with_retry_and_fallback(
         self,
         messages: List[Dict[str, str]],
@@ -64,10 +118,11 @@ class AIService:
         fallback_model: str,
         temperature: float = 0.1,
         max_retries: int = 3,
-        base_delay: float = 2.0
+        base_delay: float = 2.0,
+        stage: str = "story_synthesis"
     ) -> Optional[Dict[str, Any]]:
         """
-        Executes LLM request against primary model (z-ai/glm-5.3-flash) with up to 3 retries and delays.
+        Executes LLM request against primary model (e.g. deepseek-v4-flash) with up to 3 retries and delays.
         Switches to fallback model (e.g. openai/gpt-4o-mini) if all 3 attempts fail.
         """
         url = f"{self.base_url}/chat/completions"
@@ -85,13 +140,19 @@ class AIService:
                     resp = await client.post(url, json=payload, headers=self.headers)
                     if resp.status_code == 200:
                         res_json = resp.json()
+                        usage = res_json.get("usage", {})
+                        p_toks = usage.get("prompt_tokens", 0)
+                        c_toks = usage.get("completion_tokens", 0)
+                        if p_toks > 0 or c_toks > 0:
+                            asyncio.create_task(self.record_token_usage(stage, primary_model, p_toks, c_toks))
+
                         choice = res_json.get("choices", [{}])[0]
                         finish_reason = choice.get("finish_reason")
                         content = choice.get("message", {}).get("content", "")
                         
                         parsed = self._extract_json_dict(content)
                         if parsed and finish_reason != "error":
-                            logger.info(f"LLM [{primary_model}] attempt {attempt} succeeded.")
+                            logger.info(f"LLM [{primary_model}] attempt {attempt} succeeded (tokens: prompt={p_toks}, comp={c_toks}).")
                             return parsed
                         else:
                             logger.warning(f"LLM [{primary_model}] attempt {attempt} returned empty/invalid JSON (finish_reason: {finish_reason}).")
@@ -117,7 +178,14 @@ class AIService:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await client.post(url, json=payload_fallback, headers=self.headers)
                 if resp.status_code == 200:
-                    content = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+                    res_json = resp.json()
+                    usage = res_json.get("usage", {})
+                    p_toks = usage.get("prompt_tokens", 0)
+                    c_toks = usage.get("completion_tokens", 0)
+                    if p_toks > 0 or c_toks > 0:
+                        asyncio.create_task(self.record_token_usage(stage, fallback_model, p_toks, c_toks))
+
+                    content = res_json.get("choices", [{}])[0].get("message", {}).get("content", "")
                     parsed = self._extract_json_dict(content)
                     if parsed:
                         logger.info(f"Fallback model [{fallback_model}] succeeded.")
@@ -147,6 +215,10 @@ class AIService:
                 response = await client.post(url, json=payload, headers=self.headers)
                 if response.status_code == 200:
                     data = response.json()
+                    usage = data.get("usage", {})
+                    p_toks = usage.get("prompt_tokens", len(text.split()))
+                    if p_toks > 0:
+                        asyncio.create_task(self.record_token_usage("embedding", self.embedding_model, p_toks, 0))
                     embedding = data["data"][0]["embedding"]
                     return embedding
                 else:
@@ -156,28 +228,42 @@ class AIService:
             logger.error(f"Exception calling RouterAI Embeddings: {e}")
             return self._generate_mock_embedding(text)
 
-    async def filter_cluster_importance(self, articles: List[Dict[str, Any]]) -> bool:
+    async def filter_cluster_importance(
+        self,
+        articles: List[Dict[str, Any]],
+        threshold: Optional[int] = None
+    ) -> Tuple[bool, int, str]:
         """
         Preliminary Cheap LLM filter (primary: z-ai/glm-5.3-flash, fallback: openai/gpt-4o-mini).
-        Returns strictly True (important / keep) or False (unimportant / discard).
+        Returns (is_important: bool, importance_score: int 1-10, reason: str).
         """
         if not self.api_key or self.api_key == "mock_key":
-            return True
+            return False, 0, "No API key"
+
+        min_threshold = threshold if threshold is not None else getattr(settings, "IMPORTANCE_THRESHOLD", 6)
 
         titles_summary = "\n".join([
             f"- Заголовок: {a.get('title', '')} (Источник: {a.get('source_name', 'СМИ')})"
             for a in articles[:10]
         ])
 
-        system_prompt = """Ты — профессиональный выпускающий редактор новостной службы.
-Твоя задача: быстро и строго оценить общественно-политическую и экономическую значимость кластера новостей.
+        system_prompt = """Ты — строгий главный редактор федеральной аналитической службы новостей Prism.
+Твоя задача: беспристрастно, критично и реалистично оценить реальную общественно-политическую и геополитическую значимость инфоповода по шкале от 1 до 10.
+
+КАТЕГОРИЧЕСКОЕ ПРАВИЛО: НЕ ЗАВЫШАЙ ОЦЕНКИ! Большинство рядовых новостей должны получать 2, 3, 4 или 5 баллов. Оценку 7 и выше заслуживают только фундаментальные события!
+
+ШКАЛА ОЦЕНКИ (1-10):
+- 9-10 (Событие века / Критическое): Начало/окончание крупной войны, смена власти в ведущих державах (США, РФ, Китай), теракты/катастрофы с сотнями жертв, глобальный финансовый кризис.
+- 7-8 (Высокая / Федеральная значимость): Решения Путина/Трампа/Си, ключевые законы, ставка ЦБ/девальвация, ракетные удары по критической инфраструктуре, масштабные санкции.
+- 5-6 (Локально-значимая): Назначения министров/губернаторов, крупные корпоративные слияния/суды, региональные ЧП, заявления действующих европейских министров.
+- 3-4 (Второстепенная / Шум): Мнения и интервью экс-чиновников (на YouTube/в блогах), споры вокруг земельных участков (например ВСМ/Милти), бытовые происшествия, протокольные пресс-релизы.
+- 1-2 (Мусор / Спам): Профессиональный спорт (отказ пожать руку/фото на турнирах, результаты матчей), шоу-бизнес, развлечения, слухи, кликбейт, мода.
 
 ОТВЕТ ДОЛЖЕН БЫТЬ СТРОГО В JSON-ФОРМАТЕ:
-{"is_important": true} ИЛИ {"is_important": false}
-
-Критерии отбора:
-- true (Важно): События федерального, национального, межрегионального или международного масштаба, значимые законодательные, экономические, геополитические, оборонные или ключевые социальные события.
-- false (Неважно/Мусор): Локальные бытовые происшествия (мелкие ДТП, локальные кражи, бытовые драки), желтая пресса, слухи о звездах, кликбейт, реклама, спам и незначительные курьезы."""
+{
+  "importance_score": 3,
+  "reason": "Четкое, критичное обоснование в 1 предложение"
+}"""
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -190,15 +276,22 @@ class AIService:
             fallback_model=self.fallback_llm_model,
             temperature=0.0,
             max_retries=3,
-            base_delay=1.5
+            base_delay=1.5,
+            stage="cheap_filter"
         )
 
-        if parsed and "is_important" in parsed:
-            is_important = bool(parsed["is_important"])
-            logger.info(f"Cheap LLM Filter evaluation: is_important={is_important} for '{articles[0].get('title', '')[:60]}...'")
-            return is_important
+        if parsed and "importance_score" in parsed:
+            try:
+                score = int(parsed["importance_score"])
+            except Exception:
+                score = 5
+            score = max(1, min(10, score))
+            reason = str(parsed.get("reason", "")).strip()
+            is_important = score >= min_threshold
+            logger.info(f"Cheap LLM Importance: score={score}/10 (threshold={min_threshold}, keep={is_important}) | Reason: '{reason}' for '{articles[0].get('title', '')[:50]}...'")
+            return is_important, score, reason
 
-        return True
+        return False, 1, "Failed to parse importance"
 
     async def generate_story_card(self, articles: List[Dict[str, Any]]) -> AIStoryCardResponse:
         """
@@ -213,17 +306,23 @@ class AIService:
 1. Запрещено додумывать факты, события, участников и позиции! Опирайся исключительно на предоставленные тексты статей.
 2. Если в переданных статьях отсутствуют публикации или высказывания конкретного политического лагеря, СТРОГО укажи в поле position значение "Нет данных в предоставленных материалах", а в поле tone — "нет данных". Не пытайся угадывать или выдумывать реакцию лагеря!
 3. Блок "blindspots" (Слепые зоны) формируй СТРОГО на основе отсутствия лагерей в текущей выборке (например: "Лагерь 'Военкоры/Z' не представлен в выборке по данному событию", "Официальные СМИ проигнорировали инфоповод") либо явных умолчаний фактов, присутствующих в одних статьях и отсутствующих в других.
-4. "verified_facts" должны содержать только факты, подтвержденные как минимум двумя независимыми изданиями из предоставленных текстов.
+4. "verified_facts" должны содержать только факты, подтвержденные как минимум двумя изданиями из предоставленных текстов. Если статьи в выборке происходят только из одного лагеря (например, только официальные госагентства РФ), честно формулируй: «Факт заявлен официальными источниками РФ (РИА, ТАСС), независимого подтверждения от других сторон нет».
 5. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО объединять в один сюжет несколько разных несвязанных событий (например, разные научные открытия, не связанные между собой происшествия в разных регионах) через союз «И». Если в выборку случайно попали статьи о разных событиях, выбери ОДНО главное доминирующее событие и строй карточку строго по нему, полностью игнорируя посторонние статьи!
 
 ОТВЕТ ДОЛЖЕН БЫТЬ СТРОГО В ФОРМАТЕ ВАЛИДНОГО JSON БЕЗ ЛИШНЕГО ТЕКСТА И БЕЗ MARKDOWN-РАЗМЕТКИ.
+6. В поле "category" выбери СТРОГО одну из 6 категорий: "Политика", "Экономика", "ВПК", "Технологии", "В мире", "Общество".
+7. В поле "sentiment" укажи число от -1.0 до 1.0 (ОЦЕНКА ТОНАЛЬНОСТИ СОБЫТИЯ). Важно: события с жертвами, разрушениями, санкциями, падением рынков, уголовными приговорами имеют тональность от -0.30 до -0.85. События с достижениями, ростом, научными успехами, победами, компенсациями имеют тональность от +0.25 до +0.80. Только чисто процессуальные/рутинные новости имеют тональность около 0.0.
+8. В поле "importance_score" укажи строгое число от 1 до 10 (НЕ ЗАВЫШАЙ ОЦЕНКИ: 1-2 спорт/шоубиз, 3-4 быт/мнения экс-чиновников/земельные споры, 5-6 региональные ЧП/назначения, 7-8 федеральные законы/макроэкономика/стратегические удары, 9-10 перелом войны/смена власти в сверхдержавах).
+9. В поле "importance_reason" укажи краткое критичное обоснование оценки значимости (1 предложение).
 
 Формат JSON:
 {
   "title": "Общий нейтральный заголовок инфоповода",
   "summary": "Нейтральная выжимка фактов без эмоциональных оценок (3-5 предложений)",
-  "category": "Политика", // Выбери СТРОГО одну из 6 категорий: "Политика", "Экономика", "ВПК", "Технологии", "В мире", "Общество"
-  "sentiment": 0.0, // Число от -1.0 до 1.0 (ОЦЕНКА ТОНАЛЬНОСТИ СОБЫТИЯ). Важно: события с жертвами, разрушениями, санкциями, падением рынков, уголовными приговорами имеют тональность от -0.30 до -0.85. События с достижениями, ростом, научными успехами, победами, компенсациями имеют тональность от +0.25 до +0.80. Только чисто процессуальные/рутинные новости имеют тональность около 0.0.
+  "category": "Политика",
+  "sentiment": 0.0,
+  "importance_score": 7,
+  "importance_reason": "Федеральное решение с прямым влиянием на экономику и правоприменительную практику",
   "political_vectors": [
     {
       "camp": "Официально-лоялистская",
@@ -317,7 +416,8 @@ class AIService:
                     except Exception:
                         pass
 
-        return self._generate_mock_story_card(articles)
+        logger.error(f"Failed to generate AIStoryCardResponse for '{articles[0].get('title', '')[:60]}...'. Skipping.")
+        return None
 
     def _generate_mock_embedding(self, text: str) -> List[float]:
         """Generates deterministic pseudo-random normalized vector for local testing."""

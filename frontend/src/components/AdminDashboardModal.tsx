@@ -23,7 +23,7 @@ import {
   Heart,
   ThumbsUp,
 } from 'lucide-react';
-import { NewsSource, AdminDetailedStats, AdminArticleItem } from '../types';
+import { NewsSource, AdminDetailedStats, AdminArticleItem, AdminClusterItem } from '../types';
 import { useTelegram } from '../hooks/useTelegram';
 import { api } from '../api/client';
 
@@ -41,11 +41,21 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
   onUpdateSourceList,
 }) => {
   const { haptic } = useTelegram();
-  const [activeTab, setActiveTab] = useState<'stats' | 'articles' | 'sources' | 'pipeline' | 'telegram'>('stats');
+  const [activeTab, setActiveTab] = useState<'stats' | 'clusters' | 'articles' | 'sources' | 'pipeline' | 'telegram'>('stats');
 
   // Detailed Stats
   const [detailedStats, setDetailedStats] = useState<AdminDetailedStats | null>(null);
   const [isLoadingStats, setIsLoadingStats] = useState(false);
+
+  // Clusters & Importance state
+  const [clusters, setClusters] = useState<AdminClusterItem[]>([]);
+  const [clustersTotal, setClustersTotal] = useState(0);
+  const [clustersPage, setClustersPage] = useState(1);
+  const [clustersTotalPages, setClustersTotalPages] = useState(1);
+  const [clusterSearch, setClusterSearch] = useState('');
+  const [clusterCategoryFilter, setClusterCategoryFilter] = useState<string | undefined>(undefined);
+  const [clusterMinImportance, setClusterMinImportance] = useState<number | undefined>(undefined);
+  const [isLoadingClusters, setIsLoadingClusters] = useState(false);
 
   // Articles Inspector state
   const [articles, setArticles] = useState<AdminArticleItem[]>([]);
@@ -74,20 +84,24 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
 
   // Models list
   const [cheapModelList, setCheapModelList] = useState<string[]>([
+    'deepseek/deepseek-v4-flash-0731',
+    'qwen/qwen3.7-flash',
+    'meta-llama/llama-3.1-8b-instruct',
+    'z-ai/glm-5.3-flash',
     'openai/gpt-4o-mini',
-    'anthropic/claude-3-haiku',
-    'google/gemini-1.5-flash',
     'deepseek/deepseek-v3',
   ]);
   const [mainModelList, setMainModelList] = useState<string[]>([
+    'deepseek/deepseek-v4-flash-0731',
+    'deepseek/deepseek-chat-v3.1',
+    'qwen/qwen3.7-flash',
+    'z-ai/glm-5.3-flash',
     'openai/gpt-5.6-luna',
-    'openai/gpt-4o',
-    'anthropic/claude-3-5-sonnet',
-    'deepseek/deepseek-r1',
+    'openai/gpt-4o-mini',
   ]);
 
-  const [selectedCheapModel, setSelectedCheapModel] = useState('openai/gpt-4o-mini');
-  const [selectedMainModel, setSelectedMainModel] = useState('openai/gpt-5.6-luna');
+  const [selectedCheapModel, setSelectedCheapModel] = useState('deepseek/deepseek-v4-flash-0731');
+  const [selectedMainModel, setSelectedMainModel] = useState('deepseek/deepseek-v4-flash-0731');
 
   const [customModelInput, setCustomModelInput] = useState('');
   const [customModelTarget, setCustomModelTarget] = useState<'cheap' | 'main'>('cheap');
@@ -120,6 +134,27 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
     }
   };
 
+  const fetchClustersList = async (page = 1) => {
+    setIsLoadingClusters(true);
+    try {
+      const res = await api.getAdminClusters({
+        page,
+        page_size: 15,
+        search: clusterSearch.trim() || undefined,
+        category: clusterCategoryFilter,
+        min_importance: clusterMinImportance,
+      });
+      setClusters(res.items);
+      setClustersTotal(res.total);
+      setClustersPage(res.page);
+      setClustersTotalPages(res.total_pages);
+    } catch (e) {
+      console.warn('Clusters fetch note:', e);
+    } finally {
+      setIsLoadingClusters(false);
+    }
+  };
+
   const fetchArticlesList = async (page = 1) => {
     setIsLoadingArticles(true);
     try {
@@ -145,6 +180,7 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       fetchDetailedStats();
+      fetchClustersList(1);
       fetchArticlesList(1);
 
       api.getAdminSources().then((srcs) => {
@@ -178,12 +214,14 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
   }, [isOpen]);
 
   useEffect(() => {
-    if (activeTab === 'articles') {
+    if (activeTab === 'clusters') {
+      fetchClustersList(1);
+    } else if (activeTab === 'articles') {
       fetchArticlesList(1);
     } else if (activeTab === 'stats') {
       fetchDetailedStats();
     }
-  }, [activeTab, articleSourceFilter, articleClusterFilter, articleMediaFilter]);
+  }, [activeTab, clusterCategoryFilter, clusterMinImportance, articleSourceFilter, articleClusterFilter, articleMediaFilter]);
 
   const handleSaveSettings = async () => {
     haptic('success');
@@ -393,9 +431,10 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
         <div className="flex border-b border-slate-200 dark:border-white/10 px-4 py-2 bg-slate-100/50 dark:bg-slate-900/40 text-xs font-semibold overflow-x-auto no-scrollbar gap-1.5 flex-shrink-0">
           {[
             { id: 'stats', label: 'Аналитика и Метрики', icon: Zap },
+            { id: 'clusters', label: `Сюжеты и Важность (${clustersTotal || detailedStats?.clusters.total || 0})`, icon: Sparkles },
             { id: 'articles', label: `Статьи (${articlesTotal || detailedStats?.articles.total || 0})`, icon: FileText },
             { id: 'sources', label: `СМИ (${sourceList.length})`, icon: Radio },
-            { id: 'pipeline', label: 'ИИ Модели и Тайминги', icon: Cpu },
+            { id: 'pipeline', label: 'ИИ Модели и Чувствительность', icon: Cpu },
             { id: 'telegram', label: 'Telegram Канал и Бот', icon: Bot },
           ].map((t) => {
             const Icon = t.icon;
@@ -704,20 +743,61 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
                   </div>
                 </div>
 
-                {/* Importance Threshold */}
-                <div>
-                  <div className="flex justify-between text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    <span>Порог важности инфоповода: {importanceThreshold} / 10</span>
-                    <span className="text-slate-400">Статьи ниже порога отсекаются</span>
+                {/* Importance Threshold & Sensitivity Calibration */}
+                <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/80 dark:border-white/10 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <Sparkles className="w-4 h-4 text-sky-500" />
+                      <span className="text-xs font-bold text-slate-900 dark:text-white">
+                        Калибровка чувствительности ИИ (Порог важности):
+                      </span>
+                    </div>
+                    <span className={`px-2.5 py-0.5 rounded-xl font-mono font-bold text-xs border ${
+                      importanceThreshold >= 8
+                        ? 'bg-rose-500/15 text-rose-600 dark:text-rose-400 border-rose-500/30'
+                        : importanceThreshold >= 6
+                        ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30'
+                        : importanceThreshold >= 4
+                        ? 'bg-sky-500/15 text-[#1969ae] dark:text-sky-400 border-sky-500/30'
+                        : 'bg-slate-500/15 text-slate-600 dark:text-slate-400 border-slate-500/30'
+                    }`}>
+                      {importanceThreshold} / 10
+                    </span>
                   </div>
+
                   <input
                     type="range"
                     min="1"
                     max="10"
+                    step="1"
                     value={importanceThreshold}
                     onChange={(e) => setImportanceThreshold(parseInt(e.target.value, 10))}
-                    className="w-full accent-[#1969ae]"
+                    className="w-full accent-[#1969ae] cursor-pointer"
                   />
+
+                  {/* Dynamic Sensitivity Explanations */}
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/60 dark:border-white/5 text-[11px] leading-relaxed">
+                    {importanceThreshold >= 8 && (
+                      <div className="text-rose-600 dark:text-rose-400 font-medium">
+                        🔴 <strong>Строгий отбор (8–10 / 10):</strong> Только ключевые геополитические события, переломные решения и макроэкономика первой величины. Объем публикаций минимален, мелкий шум полностью исключен.
+                      </div>
+                    )}
+                    {importanceThreshold >= 6 && importanceThreshold <= 7 && (
+                      <div className="text-amber-600 dark:text-amber-400 font-medium">
+                        🟠 <strong>Сбалансированный режим (6–7 / 10, Рекомендуется):</strong> Включает резонансные происшествия, важные законы, экономику и международные события. Оптимальная частота ленты.
+                      </div>
+                    )}
+                    {importanceThreshold >= 4 && importanceThreshold <= 5 && (
+                      <div className="text-[#1969ae] dark:text-sky-400 font-medium">
+                        🟡 <strong>Высокая чувствительность (4–5 / 10):</strong> Пропускает отраслевые новости, корпоративные отчеты, кадровые перестановки и региональные ДТП.
+                      </div>
+                    )}
+                    {importanceThreshold <= 3 && (
+                      <div className="text-slate-500 dark:text-slate-400 font-medium">
+                        ⚪ <strong>Без фильтрации (1–3 / 10):</strong> Публикует абсолютно все поступающие статьи, включая бытовую хронику, мелкие происшествия и пресс-релизы.
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Separate Intervals */}
@@ -864,6 +944,217 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
             </div>
           )}
 
+          {/* TAB: CLUSTERS & IMPORTANCE SENSITIVITY INSPECTOR */}
+          {activeTab === 'clusters' && (
+            <div className="space-y-4 animate-fade-in">
+              {/* Header & Controls */}
+              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-[#0c1426] border border-slate-200 dark:border-white/5 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="space-y-0.5">
+                    <div className="font-bold text-slate-900 dark:text-white text-sm flex items-center space-x-2">
+                      <Sparkles className="w-4 h-4 text-sky-500" />
+                      <span>Сюжеты и Оценки Важности ИИ ({clustersTotal})</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Инспекция оценок значимости (1–10) и обоснований, назначенных ИИ для каждого сюжета
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      haptic('light');
+                      fetchClustersList(clustersPage);
+                    }}
+                    className="p-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-white/10 text-slate-500 hover:text-slate-900 dark:hover:text-white"
+                    title="Обновить список сюжетов"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isLoadingClusters ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+
+                {/* Filters Bar */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                  {/* Search */}
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="Поиск по заголовку сюжета..."
+                      value={clusterSearch}
+                      onChange={(e) => setClusterSearch(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && fetchClustersList(1)}
+                      className="w-full pl-8 pr-3 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-white/10 text-xs"
+                    />
+                  </div>
+
+                  {/* Category Filter */}
+                  <select
+                    value={clusterCategoryFilter || ''}
+                    onChange={(e) => {
+                      setClusterCategoryFilter(e.target.value || undefined);
+                    }}
+                    className="p-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-white/10 text-xs"
+                  >
+                    <option value="">Все категории</option>
+                    <option value="Политика">Политика</option>
+                    <option value="Экономика">Экономика</option>
+                    <option value="ВПК">ВПК</option>
+                    <option value="Технологии">Технологии</option>
+                    <option value="В мире">В мире</option>
+                    <option value="Общество">Общество</option>
+                  </select>
+
+                  {/* Min Importance Filter */}
+                  <select
+                    value={clusterMinImportance !== undefined ? String(clusterMinImportance) : ''}
+                    onChange={(e) => {
+                      setClusterMinImportance(e.target.value ? parseInt(e.target.value, 10) : undefined);
+                    }}
+                    className="p-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-white/10 text-xs"
+                  >
+                    <option value="">Любая важность (1-10)</option>
+                    <option value="8">🔥 8-10 (Критическая / Топ)</option>
+                    <option value="6">⚡ 6+ (Высокая / Сбалансированная)</option>
+                    <option value="4">🌱 4+ (Средняя)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Clusters List */}
+              <div className="space-y-2.5">
+                {isLoadingClusters ? (
+                  <div className="p-8 text-center text-slate-400 flex items-center justify-center space-x-2">
+                    <Loader2 className="w-5 h-5 animate-spin text-sky-500" />
+                    <span>Загрузка сюжетов и оценок...</span>
+                  </div>
+                ) : clusters.length === 0 ? (
+                  <div className="p-8 rounded-2xl bg-slate-50 dark:bg-[#0c1426] border border-slate-200 dark:border-white/5 text-center text-slate-400">
+                    Сюжеты не найдены
+                  </div>
+                ) : (
+                  clusters.map((c) => {
+                    const imp = c.importance_score || 7;
+                    const impBadgeClass =
+                      imp >= 8
+                        ? 'bg-rose-500/15 text-rose-600 dark:text-rose-400 border-rose-500/30'
+                        : imp >= 6
+                        ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30'
+                        : imp >= 4
+                        ? 'bg-sky-500/15 text-[#1969ae] dark:text-sky-400 border-sky-500/30'
+                        : 'bg-slate-500/15 text-slate-600 dark:text-slate-400 border-slate-500/30';
+
+                    return (
+                      <div
+                        key={c.id}
+                        className="p-3.5 rounded-2xl bg-slate-50 dark:bg-[#0c1426] border border-slate-200/80 dark:border-white/5 space-y-2 hover:border-sky-500/40 transition-all"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="space-y-1.5 flex-1 min-w-0">
+                            <div className="flex items-center space-x-2 flex-wrap gap-y-1">
+                              {/* Importance Badge */}
+                              <span className={`px-2 py-0.5 rounded-lg text-[11px] font-mono font-bold flex items-center space-x-1 border ${impBadgeClass}`}>
+                                <Sparkles className="w-3 h-3" />
+                                <span>Важность: {imp}/10</span>
+                              </span>
+
+                              <span className="px-1.5 py-0.5 rounded bg-[#1969ae]/10 text-[#1969ae] dark:text-sky-400 text-[10px] font-bold">
+                                {c.category}
+                              </span>
+
+                              <span className="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-[10px] text-slate-500 font-medium">
+                                {c.sources_count || 1} СМИ • {c.article_count || 1} статей
+                              </span>
+
+                              {c.tg_channel_message_id ? (
+                                <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold">
+                                  ✈️ В канале (#{c.tg_channel_message_id})
+                                </span>
+                              ) : (
+                                <span className="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-[10px] text-slate-400">
+                                  🌐 Только на сайте
+                                </span>
+                              )}
+
+                              {c.created_at && (
+                                <span className="text-[10px] text-slate-400 font-mono">
+                                  {new Date(c.created_at).toLocaleString('ru-RU', {
+                                    day: 'numeric',
+                                    month: 'short',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                  })}
+                                </span>
+                              )}
+                            </div>
+
+                            <h4 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white leading-snug">
+                              {c.title}
+                            </h4>
+
+                            {c.importance_reason && (
+                              <div className="p-2 rounded-xl bg-sky-500/5 dark:bg-sky-500/10 border border-sky-500/20 text-[11px] text-[#1969ae] dark:text-sky-300 flex items-start space-x-1.5">
+                                <span className="font-bold flex-shrink-0">💡 Обоснование ИИ:</span>
+                                <span>{c.importance_reason}</span>
+                              </div>
+                            )}
+
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-2 leading-relaxed">
+                              {c.summary}
+                            </p>
+                          </div>
+
+                          <div className="flex flex-col items-end space-y-1.5 flex-shrink-0">
+                            <button
+                              onClick={async () => {
+                                if (window.confirm(`Удалить сюжет "${c.title}"?`)) {
+                                  try {
+                                    await api.deleteAdminCluster(c.id);
+                                    fetchClustersList(clustersPage);
+                                    fetchDetailedStats();
+                                  } catch (e) {
+                                    console.error('Failed to delete cluster:', e);
+                                  }
+                                }
+                              }}
+                              className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/25 transition-all"
+                              title="Удалить сюжет"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              {/* Pagination */}
+              {clustersTotalPages > 1 && (
+                <div className="flex items-center justify-between pt-2 px-1 text-xs">
+                  <div className="text-slate-500">
+                    Страница {clustersPage} из {clustersTotalPages} (Всего: {clustersTotal})
+                  </div>
+                  <div className="flex items-center space-x-1.5">
+                    <button
+                      onClick={() => fetchClustersList(clustersPage - 1)}
+                      disabled={clustersPage <= 1}
+                      className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-white/10 disabled:opacity-40 text-slate-700 dark:text-slate-300 font-medium"
+                    >
+                      Назад
+                    </button>
+                    <button
+                      onClick={() => fetchClustersList(clustersPage + 1)}
+                      disabled={clustersPage >= clustersTotalPages}
+                      className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-white/10 disabled:opacity-40 text-slate-700 dark:text-slate-300 font-medium"
+                    >
+                      Вперед
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* TAB 1: DETAILED STATS & ANALYTICS */}
           {activeTab === 'stats' && (
             <div className="space-y-4 animate-fade-in">
@@ -919,6 +1210,97 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
                   <div className="text-[10px] text-slate-400">
                     Реакций: <strong className="text-rose-500">{Object.values(detailedStats?.social.reactions || {}).reduce((a, b) => a + b, 0)}</strong>
                   </div>
+                </div>
+              </div>
+
+              {/* Token Usage & Budget Breakdown */}
+              <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-50 to-sky-50/30 dark:from-[#0c1426] dark:to-sky-950/20 border border-slate-200 dark:border-white/10 space-y-3.5 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <div className="font-bold text-slate-900 dark:text-white text-sm flex items-center space-x-2">
+                      <Sparkles className="w-4 h-4 text-sky-500" />
+                      <span>Расход токенов и бюджет ИИ (RouterAI)</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Статистика затрат на векторизацию, фильтрацию шума и синтез сюжетов
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[10px] text-slate-400 font-semibold uppercase">За 24 часа</div>
+                    <div className="text-base font-black font-mono text-[#1969ae] dark:text-sky-400">
+                      ~{(detailedStats?.token_usage?.last_24h.total_cost_rub || 0).toFixed(2)} ₽
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3 Stages Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  {/* Stage 1: Embeddings */}
+                  <div className="p-3 rounded-xl bg-white dark:bg-slate-900/80 border border-slate-200/80 dark:border-white/5 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase">1. Векторизация</span>
+                      <span className="text-[10px] font-mono text-emerald-500 font-bold">
+                        {detailedStats?.token_usage?.last_24h.stages.embedding.calls || 0} вызовов
+                      </span>
+                    </div>
+                    <div className="text-sm font-black font-mono text-slate-900 dark:text-white">
+                      {(detailedStats?.token_usage?.last_24h.stages.embedding.total_tokens || 0).toLocaleString('ru-RU')} <span className="text-[10px] font-normal text-slate-400">токенов</span>
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] text-slate-500 border-t border-slate-100 dark:border-white/5 pt-1">
+                      <span>Стоимость:</span>
+                      <strong className="font-mono text-emerald-600 dark:text-emerald-400">
+                        ~{(detailedStats?.token_usage?.last_24h.stages.embedding.cost_rub || 0).toFixed(3)} ₽
+                      </strong>
+                    </div>
+                  </div>
+
+                  {/* Stage 2: Cheap Filter */}
+                  <div className="p-3 rounded-xl bg-white dark:bg-slate-900/80 border border-slate-200/80 dark:border-white/5 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase">2. Быстрый фильтр</span>
+                      <span className="text-[10px] font-mono text-amber-500 font-bold">
+                        {detailedStats?.token_usage?.last_24h.stages.cheap_filter.calls || 0} проверок
+                      </span>
+                    </div>
+                    <div className="text-sm font-black font-mono text-slate-900 dark:text-white">
+                      {(detailedStats?.token_usage?.last_24h.stages.cheap_filter.total_tokens || 0).toLocaleString('ru-RU')} <span className="text-[10px] font-normal text-slate-400">токенов</span>
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] text-slate-500 border-t border-slate-100 dark:border-white/5 pt-1">
+                      <span>Стоимость:</span>
+                      <strong className="font-mono text-amber-600 dark:text-amber-400">
+                        ~{(detailedStats?.token_usage?.last_24h.stages.cheap_filter.cost_rub || 0).toFixed(3)} ₽
+                      </strong>
+                    </div>
+                  </div>
+
+                  {/* Stage 3: Story Synthesis */}
+                  <div className="p-3 rounded-xl bg-white dark:bg-slate-900/80 border border-slate-200/80 dark:border-white/5 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase">3. Глубокий синтез</span>
+                      <span className="text-[10px] font-mono text-sky-500 font-bold">
+                        {detailedStats?.token_usage?.last_24h.stages.story_synthesis.calls || 0} сюжетов
+                      </span>
+                    </div>
+                    <div className="text-sm font-black font-mono text-slate-900 dark:text-white">
+                      {(detailedStats?.token_usage?.last_24h.stages.story_synthesis.total_tokens || 0).toLocaleString('ru-RU')} <span className="text-[10px] font-normal text-slate-400">токенов</span>
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] text-slate-500 border-t border-slate-100 dark:border-white/5 pt-1">
+                      <span>Стоимость:</span>
+                      <strong className="font-mono text-sky-600 dark:text-sky-400">
+                        ~{(detailedStats?.token_usage?.last_24h.stages.story_synthesis.cost_rub || 0).toFixed(3)} ₽
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+
+                {/* All-time summary line */}
+                <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-sky-500/10 border border-sky-500/20 text-[11px]">
+                  <span className="text-slate-600 dark:text-slate-300 font-medium">
+                    За всё время: <strong className="font-mono text-slate-900 dark:text-white">{(detailedStats?.token_usage?.all_time.total_tokens || 0).toLocaleString('ru-RU')} токенов</strong> ({detailedStats?.token_usage?.all_time.total_calls || 0} вызовов)
+                  </span>
+                  <span className="font-bold text-[#1969ae] dark:text-sky-400 font-mono text-xs">
+                    Всего: ~{(detailedStats?.token_usage?.all_time.total_cost_rub || 0).toFixed(2)} ₽
+                  </span>
                 </div>
               </div>
 
@@ -1212,9 +1594,25 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
                               </span>
                             )}
                             {art.cluster_id ? (
-                              <span className="px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-600 dark:text-sky-400 text-[10px] font-bold">
-                                Сюжет #{art.cluster_id}
-                              </span>
+                              <>
+                                <span className="px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-600 dark:text-sky-400 text-[10px] font-bold">
+                                  Сюжет #{art.cluster_id}
+                                </span>
+                                {art.importance_score && (
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border ${
+                                      art.importance_score >= 8
+                                        ? 'bg-rose-500/15 text-rose-600 dark:text-rose-400 border-rose-500/30'
+                                        : art.importance_score >= 6
+                                        ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30'
+                                        : 'bg-slate-500/15 text-slate-600 dark:text-slate-400 border-slate-500/30'
+                                    }`}
+                                    title={art.importance_reason || `Важность: ${art.importance_score}/10`}
+                                  >
+                                    ⚡ {art.importance_score}/10
+                                  </span>
+                                )}
+                              </>
                             ) : (
                               <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[10px]">
                                 В очереди
@@ -1335,15 +1733,34 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
                 <span className="text-slate-400 text-[11px]">
                   ID статьи в БД: <strong className="font-mono text-slate-700 dark:text-slate-300">#{selectedArticlePreview.id}</strong>
                 </span>
-                <a
-                  href={selectedArticlePreview.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-3 py-1.5 rounded-xl bg-sky-500/10 text-[#1969ae] dark:text-sky-300 hover:bg-sky-500/20 font-bold flex items-center space-x-1"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  <span>Открыть оригинал на сайте СМИ</span>
-                </a>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={async () => {
+                      if (window.confirm('Вы уверены, что хотите удалить эту статью?')) {
+                        try {
+                          await api.deleteAdminArticle(selectedArticlePreview.id);
+                          fetchArticlesList(articlesPage);
+                          setSelectedArticlePreview(null);
+                        } catch (e) {
+                          console.error(e);
+                        }
+                      }
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-red-500/10 text-red-600 hover:bg-red-500/20 font-bold flex items-center space-x-1"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Удалить</span>
+                  </button>
+                  <a
+                    href={selectedArticlePreview.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 rounded-xl bg-sky-500/10 text-[#1969ae] dark:text-sky-300 hover:bg-sky-500/20 font-bold flex items-center space-x-1"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>Оригинал</span>
+                  </a>
+                </div>
               </div>
             </div>
           </div>
