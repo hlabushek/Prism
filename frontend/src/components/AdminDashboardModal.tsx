@@ -147,7 +147,7 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
       fetchDetailedStats();
       fetchArticlesList(1);
 
-      api.getSources().then((srcs) => {
+      api.getAdminSources().then((srcs) => {
         if (srcs && srcs.length > 0) {
           setSourceList(srcs);
           onUpdateSourceList(srcs);
@@ -244,7 +244,8 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
 
   const handleStartEdit = (src: NewsSource) => {
     setEditingSourceId(src.id);
-    setEditForm({ ...src });
+    const currentLogo = src.logo_url || (src as any).logoUrl || '';
+    setEditForm({ ...src, logo_url: currentLogo });
   };
 
   const handleSaveEdit = async (id: number) => {
@@ -565,9 +566,9 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
 
                           {/* Logo Preview */}
                           <div className="w-8 h-8 rounded-lg bg-white dark:bg-slate-800 p-1 border border-slate-200 dark:border-white/10 flex items-center justify-center flex-shrink-0 overflow-hidden">
-                            {src.logo_url ? (
+                            {(src.logo_url || (src as any).logoUrl) ? (
                               <img
-                                src={src.logo_url}
+                                src={src.logo_url || (src as any).logoUrl}
                                 alt={src.name}
                                 className="w-full h-full object-contain"
                                 onError={(e) => ((e.target as HTMLElement).style.display = 'none')}

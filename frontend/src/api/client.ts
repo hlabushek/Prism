@@ -316,6 +316,15 @@ export const api = {
     }
   },
 
+  getAdminSources: async (): Promise<NewsSource[]> => {
+    try {
+      const response = await apiClient.get<NewsSource[]>('/admin/sources');
+      return response.data;
+    } catch {
+      return [];
+    }
+  },
+
   createAdminSource: async (sourceData: Partial<NewsSource>): Promise<NewsSource> => {
     const response = await apiClient.post<NewsSource>('/admin/sources', sourceData);
     return response.data;

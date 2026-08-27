@@ -77,7 +77,7 @@ class NewsPipeline:
         self.parser = NewsParser()
 
     async def seed_default_sources(self, db: AsyncSession):
-        """Prepopulates default media sources if table is empty or adds missing ones."""
+        """Prepopulates default media sources if table is empty or adds missing ones without overwriting user edits."""
         for s in DEFAULT_SOURCES:
             existing = await db.execute(select(NewsSource).where(NewsSource.url == s["url"]))
             source_obj = existing.scalar_one_or_none()
@@ -92,14 +92,11 @@ class NewsPipeline:
                 )
                 db.add(source)
             else:
-                source_obj.name = s["name"]
-                source_obj.default_camp = s["default_camp"]
-                source_obj.feed_type = s["feed_type"]
-                source_obj.is_active = True
-                if s.get("logo_url"):
+                # Only populate logo_url if currently empty, never overwrite user customizations
+                if not source_obj.logo_url and s.get("logo_url"):
                     source_obj.logo_url = s["logo_url"]
         await db.commit()
-        logger.info(f"Checked & synced {len(DEFAULT_SOURCES)} default news sources.")
+        logger.info(f"Checked & synced default news sources.")
 
     async def recalculate_sources_rating(self, db: AsyncSession):
         """Dynamically computes real trust, factuality, and bias metrics for all sources based on DB content."""
