@@ -324,53 +324,55 @@ class NewsPipeline:
 
         async with self._clustering_lock:
             logger.info("Starting Clustering & LLM Analysis Task...")
-            cutoff_time = datetime.utcnow() - timedelta(hours=max(48, settings.LOOKBACK_HOURS * 2))
+            update_window_hours = getattr(settings, "STORY_UPDATE_WINDOW_HOURS", 12)
+            update_cutoff = datetime.utcnow() - timedelta(hours=update_window_hours)
+            lookback_cutoff = datetime.utcnow() - timedelta(hours=max(48, settings.LOOKBACK_HOURS * 2))
 
             # Find all unclustered articles with valid embeddings in the last lookback window
             query = select(Article).options(selectinload(Article.source)).where(
                 and_(
                     Article.cluster_id.is_(None),
                     Article.embedding.isnot(None),
-                    Article.published_at >= cutoff_time
+                    Article.published_at >= lookback_cutoff
                 )
             ).order_by(Article.published_at.desc())
 
-        result = await db.execute(query)
-        unclustered = result.scalars().all()
+            result = await db.execute(query)
+            unclustered = result.scalars().all()
 
-        if not unclustered:
-            logger.info("No unclustered articles found in the last 24h.")
-            return
+            if not unclustered:
+                logger.info("No unclustered articles found.")
+                return
 
-        logger.info(f"Processing {len(unclustered)} unclustered articles...")
+            logger.info(f"Processing {len(unclustered)} unclustered articles (update window: {update_window_hours}h)...")
 
-        # Step 1: Assign to existing clusters if similarity matches
-        remaining_articles = []
-        clusters_to_update = set()
+            # Step 1: Assign to existing clusters ONLY IF within the update window (e.g. 12h)
+            remaining_articles = []
+            clusters_to_update = set()
 
-        for art in unclustered:
-            matched_cluster_id = await clustering_service.find_matching_cluster(db, art.embedding, cutoff_time)
-            if matched_cluster_id:
-                art.cluster_id = matched_cluster_id
-                clusters_to_update.add(matched_cluster_id)
-                cluster = await db.get(StoryCluster, matched_cluster_id)
-                if cluster:
-                    cluster.article_count = (cluster.article_count or 1) + 1
-                    # Append media if available
-                    if art.media_url and str(art.media_url).startswith("http"):
-                        current_media = list(cluster.media or [])
-                        if not any(m.get("url") == art.media_url for m in current_media):
-                            current_media.append({
-                                "type": "image",
-                                "url": art.media_url,
-                                "caption": art.title,
-                                "source_name": art.source.name if art.source else "СМИ"
-                            })
-                            cluster.media = current_media[:5]
-                    cluster.updated_at = datetime.utcnow()
-                await db.commit()
-            else:
-                remaining_articles.append(art)
+            for art in unclustered:
+                matched_cluster_id = await clustering_service.find_matching_cluster(db, art.embedding, update_cutoff)
+                if matched_cluster_id:
+                    art.cluster_id = matched_cluster_id
+                    clusters_to_update.add(matched_cluster_id)
+                    cluster = await db.get(StoryCluster, matched_cluster_id)
+                    if cluster:
+                        cluster.article_count = (cluster.article_count or 1) + 1
+                        # Append media if available
+                        if art.media_url and str(art.media_url).startswith("http"):
+                            current_media = list(cluster.media or [])
+                            if not any(m.get("url") == art.media_url for m in current_media):
+                                current_media.append({
+                                    "type": "image",
+                                    "url": art.media_url,
+                                    "caption": art.title,
+                                    "source_name": art.source.name if art.source else "СМИ"
+                                })
+                                cluster.media = current_media[:5]
+                        cluster.updated_at = datetime.utcnow()
+                    await db.commit()
+                else:
+                    remaining_articles.append(art)
 
         # Step 1.5: Re-analyze updated clusters with new incoming publications & update Telegram post
         for cid in clusters_to_update:
@@ -499,9 +501,9 @@ class NewsPipeline:
         created_count = 0
         MAX_STORIES_PER_BATCH = 10
 
-        # Fetch recent existing StoryClusters in lookback window for cluster-level duplicate avoidance
+        # Fetch recent existing StoryClusters in update window for cluster-level duplicate avoidance
         recent_clusters_res = await db.execute(
-            select(StoryCluster).where(StoryCluster.created_at >= cutoff_time).order_by(StoryCluster.created_at.desc())
+            select(StoryCluster).where(StoryCluster.created_at >= update_cutoff).order_by(StoryCluster.created_at.desc())
         )
         recent_clusters = list(recent_clusters_res.scalars().all())
 
@@ -516,11 +518,11 @@ class NewsPipeline:
                 logger.info(f"Skipping single-source cluster '{group[0].title[:50]}...' (requires >= 2 independent sources). Waiting for further coverage.")
                 continue
 
-            # Check if any article in this group matches an existing cluster created in the last 48h
+            # Check if any article in this group matches an existing cluster created in the update window (e.g. 12h)
             matched_cid = None
             for g_art in group:
                 if g_art.embedding:
-                    matched_cid = await clustering_service.find_matching_cluster(db, g_art.embedding, cutoff_time)
+                    matched_cid = await clustering_service.find_matching_cluster(db, g_art.embedding, update_cutoff)
                     if matched_cid:
                         break
 

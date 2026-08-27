@@ -22,6 +22,7 @@ import {
   Layers,
   Heart,
   ThumbsUp,
+  Clock,
 } from 'lucide-react';
 import { NewsSource, AdminDetailedStats, AdminArticleItem, AdminClusterItem } from '../types';
 import { useTelegram } from '../hooks/useTelegram';
@@ -84,9 +85,8 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
 
   // Models list
   const [cheapModelList, setCheapModelList] = useState<string[]>([
-    'deepseek/deepseek-v4-flash-0731',
     'qwen/qwen3.7-flash',
-    'meta-llama/llama-3.1-8b-instruct',
+    'deepseek/deepseek-v4-flash-0731',
     'z-ai/glm-5.3-flash',
     'openai/gpt-4o-mini',
     'deepseek/deepseek-v3',
@@ -96,11 +96,10 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
     'deepseek/deepseek-chat-v3.1',
     'qwen/qwen3.7-flash',
     'z-ai/glm-5.3-flash',
-    'openai/gpt-5.6-luna',
     'openai/gpt-4o-mini',
   ]);
 
-  const [selectedCheapModel, setSelectedCheapModel] = useState('deepseek/deepseek-v4-flash-0731');
+  const [selectedCheapModel, setSelectedCheapModel] = useState('qwen/qwen3.7-flash');
   const [selectedMainModel, setSelectedMainModel] = useState('deepseek/deepseek-v4-flash-0731');
 
   const [customModelInput, setCustomModelInput] = useState('');
@@ -109,6 +108,7 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
   const [parseInterval, setParseInterval] = useState(10);
   const [llmInterval, setLlmInterval] = useState(25);
   const [importanceThreshold, setImportanceThreshold] = useState(6);
+  const [storyUpdateWindowHours, setStoryUpdateWindowHours] = useState(12);
 
   // Telegram settings
   const [autoPost, setAutoPost] = useState(true);
@@ -141,15 +141,17 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
         page,
         page_size: 15,
         search: clusterSearch.trim() || undefined,
-        category: clusterCategoryFilter,
-        min_importance: clusterMinImportance,
+        category: clusterCategoryFilter || undefined,
+        min_importance: clusterMinImportance || undefined,
       });
-      setClusters(res.items);
-      setClustersTotal(res.total);
-      setClustersPage(res.page);
-      setClustersTotalPages(res.total_pages);
+      if (res && res.items) {
+        setClusters(res.items);
+        setClustersTotal(res.total);
+        setClustersPage(res.page);
+        setClustersTotalPages(res.total_pages);
+      }
     } catch (e) {
-      console.warn('Clusters fetch note:', e);
+      console.warn('Admin clusters fetch note:', e);
     } finally {
       setIsLoadingClusters(false);
     }
@@ -160,18 +162,20 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
     try {
       const res = await api.getAdminArticles({
         page,
-        page_size: 15,
-        source_id: articleSourceFilter,
+        page_size: 20,
         search: articleSearch.trim() || undefined,
+        source_id: articleSourceFilter,
         has_cluster: articleClusterFilter,
         has_media: articleMediaFilter,
       });
-      setArticles(res.items);
-      setArticlesTotal(res.total);
-      setArticlesPage(res.page);
-      setArticlesTotalPages(res.total_pages);
+      if (res && res.items) {
+        setArticles(res.items);
+        setArticlesTotal(res.total);
+        setArticlesPage(res.page);
+        setArticlesTotalPages(res.total_pages);
+      }
     } catch (e) {
-      console.warn('Articles fetch note:', e);
+      console.warn('Admin articles fetch note:', e);
     } finally {
       setIsLoadingArticles(false);
     }
@@ -180,33 +184,28 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       fetchDetailedStats();
-      fetchClustersList(1);
-      fetchArticlesList(1);
-
-      api.getAdminSources().then((srcs) => {
-        if (srcs && srcs.length > 0) {
-          setSourceList(srcs);
-          onUpdateSourceList(srcs);
-        }
-      }).catch((err) => console.warn('Sources load note:', err));
-
       api.getAdminSettings().then((cfg) => {
         if (cfg) {
           if (cfg.cheap_llm_model) {
             setSelectedCheapModel(cfg.cheap_llm_model);
-            setCheapModelList((prev) => prev.includes(cfg.cheap_llm_model) ? prev : [cfg.cheap_llm_model, ...prev]);
+            if (!cheapModelList.includes(cfg.cheap_llm_model)) {
+              setCheapModelList((prev) => [...prev, cfg.cheap_llm_model]);
+            }
           }
           if (cfg.llm_model) {
             setSelectedMainModel(cfg.llm_model);
-            setMainModelList((prev) => prev.includes(cfg.llm_model) ? prev : [cfg.llm_model, ...prev]);
+            if (!mainModelList.includes(cfg.llm_model)) {
+              setMainModelList((prev) => [...prev, cfg.llm_model]);
+            }
           }
+          if (cfg.importance_threshold !== undefined) setImportanceThreshold(cfg.importance_threshold);
+          if (cfg.story_update_window_hours !== undefined) setStoryUpdateWindowHours(cfg.story_update_window_hours);
           if (cfg.parse_interval_minutes) setParseInterval(cfg.parse_interval_minutes);
           if (cfg.llm_interval_minutes) setLlmInterval(cfg.llm_interval_minutes);
-          if (cfg.importance_threshold) setImportanceThreshold(cfg.importance_threshold);
+          if (cfg.auto_post_to_channel !== undefined) setAutoPost(cfg.auto_post_to_channel);
           if (cfg.telegram_channel_id) setChannelId(cfg.telegram_channel_id);
           if (cfg.telegram_discussion_group_id) setDiscussionGroupId(cfg.telegram_discussion_group_id);
           if (cfg.telegram_bot_token) setBotToken(cfg.telegram_bot_token);
-          if (cfg.auto_post_to_channel !== undefined) setAutoPost(cfg.auto_post_to_channel);
           if (cfg.sync_comments_enabled !== undefined) setSyncComments(cfg.sync_comments_enabled);
         }
       }).catch((e) => console.warn("Admin settings fetch note:", e));
@@ -231,6 +230,7 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
         cheap_llm_model: selectedCheapModel,
         llm_model: selectedMainModel,
         importance_threshold: importanceThreshold,
+        story_update_window_hours: storyUpdateWindowHours,
         parse_interval_minutes: parseInterval,
         llm_interval_minutes: llmInterval,
         auto_post_to_channel: autoPost,
@@ -795,6 +795,47 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
                     {importanceThreshold <= 3 && (
                       <div className="text-slate-500 dark:text-slate-400 font-medium">
                         ⚪ <strong>Без фильтрации (1–3 / 10):</strong> Публикует абсолютно все поступающие статьи, включая бытовую хронику, мелкие происшествия и пресс-релизы.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Story Update Lifecycle Window */}
+                <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/80 dark:border-white/10 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <Clock className="w-4 h-4 text-indigo-500" />
+                      <span className="text-xs font-bold text-slate-900 dark:text-white">
+                        Окно обновления сюжетов (Жизненный цикл):
+                      </span>
+                    </div>
+                    <span className="px-2.5 py-0.5 rounded-xl font-mono font-bold text-xs bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 border border-indigo-500/30">
+                      {storyUpdateWindowHours} ч.
+                    </span>
+                  </div>
+
+                  <input
+                    type="range"
+                    min="3"
+                    max="48"
+                    step="3"
+                    value={storyUpdateWindowHours}
+                    onChange={(e) => setStoryUpdateWindowHours(parseInt(e.target.value, 10))}
+                    className="w-full accent-indigo-500 cursor-pointer"
+                  />
+
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/60 dark:border-white/5 text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
+                    {storyUpdateWindowHours <= 6 ? (
+                      <div>
+                        ⚡ <strong>Короткий цикл (3–6 ч):</strong> Быстрая смена повестки. Новые публикации через {storyUpdateWindowHours}ч сразу оформляются в отдельный новый сюжет с новым ракурсом и новым постом в Telegram.
+                      </div>
+                    ) : storyUpdateWindowHours <= 18 ? (
+                      <div>
+                        🔄 <strong>Сбалансированный цикл (12 ч, Рекомендуется):</strong> В течение дня инфоповод дополняется фактами, а утренние/вечерние продолжения выходят отдельной самостоятельной статьей.
+                      </div>
+                    ) : (
+                      <div>
+                        ⏳ <strong>Длинный цикл (24–48 ч):</strong> Долгосрочные темы продолжают обновлять один и тот же пост в течение нескольких дней.
                       </div>
                     )}
                   </div>

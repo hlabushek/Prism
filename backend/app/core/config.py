@@ -20,9 +20,9 @@ class Settings(BaseSettings):
     ROUTERAI_API_KEY: str = "sk-S6nOQgQOO7RfoTwWXMWHAjyGXH8kiXxu"
     ROUTERAI_BASE_URL: str = "https://routerai.ru/api/v1"
     
-    # AI Models Architecture (Primary: deepseek/deepseek-v4-flash-0731, Fallback: openai/gpt-4o-mini)
+    # AI Models Architecture (Primary: qwen/qwen3.7-flash, Fallback: openai/gpt-4o-mini)
     EMBEDDING_MODEL: str = "openai/text-embedding-3-small"
-    CHEAP_LLM_MODEL: str = "deepseek/deepseek-v4-flash-0731"
+    CHEAP_LLM_MODEL: str = "qwen/qwen3.7-flash"
     LLM_MODEL: str = "deepseek/deepseek-v4-flash-0731"
     FALLBACK_LLM_MODEL: str = "openai/gpt-4o-mini"
     EMBEDDING_DIMENSION: int = 1536
@@ -39,9 +39,10 @@ class Settings(BaseSettings):
     LLM_ANALYSIS_INTERVAL_MINUTES: int = 25
     RECALCULATE_TRUST_INTERVAL_HOURS: int = 24
 
-    # Clustering settings (calibrated for cosine similarity of multilingual text-embedding-3-small)
+    # Clustering and Story lifecycle settings
     SIMILARITY_THRESHOLD: float = 0.52
     LOOKBACK_HOURS: int = 48
+    STORY_UPDATE_WINDOW_HOURS: int = 12  # Stories older than 12h are not edited; new follow-ups become fresh stories
 
     # Telegram Bot & Channel Integration
     TELEGRAM_BOT_TOKEN: str = "8940282710:AAG8d_Gd7jBpEv6WnahJoGmjQnRoEuoqtEE"

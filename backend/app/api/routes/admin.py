@@ -75,6 +75,7 @@ class PipelineSettingsSchema(BaseModel):
     cheap_llm_model: str = settings.CHEAP_LLM_MODEL
     llm_model: str = settings.LLM_MODEL
     importance_threshold: int = settings.IMPORTANCE_THRESHOLD
+    story_update_window_hours: int = settings.STORY_UPDATE_WINDOW_HOURS
     parse_interval_minutes: int = settings.PARSE_INTERVAL_MINUTES
     llm_interval_minutes: int = settings.LLM_ANALYSIS_INTERVAL_MINUTES
     auto_post_to_channel: bool = settings.AUTO_POST_TO_CHANNEL
@@ -89,6 +90,7 @@ _runtime_settings = {
     "cheap_llm_model": settings.CHEAP_LLM_MODEL,
     "llm_model": settings.LLM_MODEL,
     "importance_threshold": settings.IMPORTANCE_THRESHOLD,
+    "story_update_window_hours": settings.STORY_UPDATE_WINDOW_HOURS,
     "parse_interval_minutes": settings.PARSE_INTERVAL_MINUTES,
     "llm_interval_minutes": settings.LLM_ANALYSIS_INTERVAL_MINUTES,
     "auto_post_to_channel": settings.AUTO_POST_TO_CHANNEL,
