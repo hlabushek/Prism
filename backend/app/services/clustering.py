@@ -45,12 +45,13 @@ class ClusteringService:
             return await self._fallback_match_cluster(db, article_embedding, cutoff_time, max_distance)
 
         try:
-            # PostgreSQL pgvector query for nearest article with existing cluster
+            # PostgreSQL pgvector query for nearest article with existing ACTIVE cluster (created within update window)
             query = (
                 select(Article.cluster_id, Article.embedding.cosine_distance(article_embedding).label("dist"))
+                .join(StoryCluster, Article.cluster_id == StoryCluster.id)
                 .where(
                     and_(
-                        Article.published_at >= cutoff_time,
+                        StoryCluster.created_at >= cutoff_time,
                         Article.cluster_id.isnot(None),
                         Article.embedding.isnot(None)
                     )
@@ -63,7 +64,7 @@ class ClusteringService:
             row = result.first()
 
             if row and row.dist <= max_distance:
-                logger.info(f"Matched article to existing cluster #{row.cluster_id} (cosine distance: {row.dist:.3f})")
+                logger.info(f"Matched article to active cluster #{row.cluster_id} (cosine distance: {row.dist:.3f})")
                 return row.cluster_id
 
         except Exception as e:
@@ -80,11 +81,15 @@ class ClusteringService:
         max_distance: float
     ) -> Optional[int]:
         """Fallback in-memory cosine comparison if pgvector operator is unavailable."""
-        query = select(Article).where(
-            and_(
-                Article.published_at >= cutoff_time,
-                Article.cluster_id.isnot(None),
-                Article.embedding.isnot(None)
+        query = (
+            select(Article)
+            .join(StoryCluster, Article.cluster_id == StoryCluster.id)
+            .where(
+                and_(
+                    StoryCluster.created_at >= cutoff_time,
+                    Article.cluster_id.isnot(None),
+                    Article.embedding.isnot(None)
+                )
             )
         )
         result = await db.execute(query)
