@@ -282,6 +282,37 @@ class TelegramChannelBotService:
             logger.error(f"Failed to update Telegram message: {e}")
             return False
 
+    async def delete_story_from_channel(
+        self,
+        message_id: int,
+        channel_id: Optional[str] = None
+    ) -> bool:
+        """
+        Deletes a story post from the Telegram channel.
+        """
+        target_channel = channel_id or getattr(settings, "TELEGRAM_CHANNEL_ID", None)
+        if not self.api_url or not target_channel or not message_id:
+            return False
+
+        try:
+            async with self._get_client(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{self.api_url}/deleteMessage",
+                    json={
+                        "chat_id": target_channel,
+                        "message_id": message_id
+                    }
+                )
+                if resp.status_code == 200 and resp.json().get("ok"):
+                    logger.info(f"Successfully deleted Telegram message #{message_id} from {target_channel}")
+                    return True
+                else:
+                    logger.warning(f"Failed to delete Telegram message #{message_id}: {resp.text}")
+                    return False
+        except Exception as e:
+            logger.error(f"Exception deleting Telegram message #{message_id}: {e}")
+            return False
+
     async def forward_web_comment_to_discussion(
         self,
         discussion_group_id: str,

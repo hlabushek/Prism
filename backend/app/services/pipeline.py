@@ -105,6 +105,8 @@ def cosine_sim(v1: List[float], v2: List[float]) -> float:
 class NewsPipeline:
     def __init__(self):
         self.parser = NewsParser()
+        self._ingestion_lock = asyncio.Lock()
+        self._clustering_lock = asyncio.Lock()
 
     async def seed_default_sources(self, db: AsyncSession):
         """Prepopulates default media sources if table is empty or adds missing ones without overwriting user edits."""
@@ -174,12 +176,17 @@ class NewsPipeline:
         3. Cleans text and generates vector embeddings for title + first paragraph.
         4. Saves newly vectorized articles to the database with media attachments.
         """
-        logger.info("Starting News Ingestion & Vectorization Task (via SOCKS5 proxy)...")
-        await self.seed_default_sources(db)
+        if self._ingestion_lock.locked():
+            logger.info("Ingestion task is already in progress. Skipping concurrent trigger.")
+            return
 
-        # Get active sources
-        result = await db.execute(select(NewsSource).where(NewsSource.is_active.is_(True)))
-        sources = result.scalars().all()
+        async with self._ingestion_lock:
+            logger.info("Starting News Ingestion & Vectorization Task (via SOCKS5 proxy)...")
+            await self.seed_default_sources(db)
+
+            # Get active sources
+            result = await db.execute(select(NewsSource).where(NewsSource.is_active.is_(True)))
+            sources = result.scalars().all()
 
         total_saved = 0
         for source in sources:
@@ -310,17 +317,22 @@ class NewsPipeline:
         3. Applies preliminary cheap LLM importance filter (CHEAP_LLM_MODEL).
         4. Synthesizes AI story cards via LLM_MODEL with media and real analytics.
         """
-        logger.info("Starting Clustering & LLM Analysis Task...")
-        cutoff_time = datetime.utcnow() - timedelta(hours=max(48, settings.LOOKBACK_HOURS * 2))
+        if self._clustering_lock.locked():
+            logger.info("Clustering & Analysis task is already in progress. Skipping concurrent trigger.")
+            return
 
-        # Find all unclustered articles with valid embeddings in the last lookback window
-        query = select(Article).options(selectinload(Article.source)).where(
-            and_(
-                Article.cluster_id.is_(None),
-                Article.embedding.isnot(None),
-                Article.published_at >= cutoff_time
-            )
-        ).order_by(Article.published_at.desc())
+        async with self._clustering_lock:
+            logger.info("Starting Clustering & LLM Analysis Task...")
+            cutoff_time = datetime.utcnow() - timedelta(hours=max(48, settings.LOOKBACK_HOURS * 2))
+
+            # Find all unclustered articles with valid embeddings in the last lookback window
+            query = select(Article).options(selectinload(Article.source)).where(
+                and_(
+                    Article.cluster_id.is_(None),
+                    Article.embedding.isnot(None),
+                    Article.published_at >= cutoff_time
+                )
+            ).order_by(Article.published_at.desc())
 
         result = await db.execute(query)
         unclustered = result.scalars().all()
@@ -568,6 +580,35 @@ class NewsPipeline:
                                 "caption": art.title,
                                 "source_name": art.source.name if art.source else "Первоисточник"
                             })
+
+                # Concurrency check: Ensure none of the articles were clustered by another task during LLM generation
+                group_art_ids = [a.id for a in group if getattr(a, "id", None)]
+                if group_art_ids:
+                    assigned_check = await db.execute(
+                        select(Article.id).where(and_(Article.id.in_(group_art_ids), Article.cluster_id.isnot(None)))
+                    )
+                    if assigned_check.first():
+                        logger.warning("One or more articles were already clustered during synthesis. Aborting duplicate creation.")
+                        continue
+
+                # Near-duplicate cluster title check against DB (last 2 hours)
+                cluster_dup_res = await db.execute(
+                    select(StoryCluster).where(StoryCluster.created_at >= datetime.utcnow() - timedelta(hours=2))
+                )
+                existing_recent_clusters = list(cluster_dup_res.scalars().all())
+                is_duplicate_cluster = False
+                for rec_c in existing_recent_clusters:
+                    if is_near_duplicate_text(ai_card.title, rec_c.title, ai_card.summary or "", rec_c.summary or ""):
+                        logger.info(f"Duplicate story detected ('{ai_card.title}' matches cluster #{rec_c.id} '{rec_c.title}'). Attaching articles to #{rec_c.id} instead of creating duplicate.")
+                        for art in group:
+                            art.cluster_id = rec_c.id
+                        rec_c.article_count = (rec_c.article_count or 1) + len(group)
+                        await db.commit()
+                        is_duplicate_cluster = True
+                        break
+
+                if is_duplicate_cluster:
+                    continue
 
                 # Persist StoryCluster with sources_count and AI importance
                 sources_count = max(1, len(unique_source_ids))
