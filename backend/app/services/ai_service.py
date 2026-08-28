@@ -158,6 +158,9 @@ class AIService:
                             logger.warning(f"LLM [{primary_model}] attempt {attempt} returned empty/invalid JSON (finish_reason: {finish_reason}).")
                     else:
                         logger.warning(f"LLM [{primary_model}] attempt {attempt} returned HTTP {resp.status_code}: {resp.text[:150]}")
+                        if resp.status_code in (401, 402):
+                            logger.error(f"RouterAI authentication or balance error (HTTP {resp.status_code}). Aborting further calls.")
+                            return None
             except Exception as e:
                 logger.warning(f"LLM [{primary_model}] attempt {attempt} threw exception: {e}")
 
@@ -191,6 +194,8 @@ class AIService:
                         logger.info(f"Fallback model [{fallback_model}] succeeded.")
                         return parsed
                 logger.error(f"Fallback model [{fallback_model}] failed with HTTP {resp.status_code}: {resp.text[:150]}")
+                if resp.status_code in (401, 402):
+                    return None
         except Exception as fb_err:
             logger.error(f"Fallback model [{fallback_model}] exception: {fb_err}")
 

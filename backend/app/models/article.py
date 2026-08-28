@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Index
+from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, ForeignKey, Index
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy import JSON
 from sqlalchemy.orm import relationship
@@ -32,6 +32,9 @@ class Article(Base):
 
     # Association with story cluster
     cluster_id = Column(Integer, ForeignKey("story_clusters.id", ondelete="SET NULL"), nullable=True, index=True)
+    is_processed = Column(Boolean, default=False, nullable=False, index=True)
+    importance_score = Column(Integer, nullable=True)
+    importance_reason = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     source = relationship("NewsSource", lazy="joined")

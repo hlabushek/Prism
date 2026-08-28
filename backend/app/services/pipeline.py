@@ -337,10 +337,11 @@ class NewsPipeline:
             update_cutoff = datetime.utcnow() - timedelta(hours=update_window_hours)
             lookback_cutoff = datetime.utcnow() - timedelta(hours=max(48, settings.LOOKBACK_HOURS * 2))
 
-            # Find all unclustered articles with valid embeddings in the last lookback window
+            # Find all unclustered and un-evaluated articles with valid embeddings in the last lookback window
             query = select(Article).options(selectinload(Article.source)).where(
                 and_(
                     Article.cluster_id.is_(None),
+                    Article.is_processed == False,
                     Article.embedding.isnot(None),
                     Article.published_at >= lookback_cutoff
                 )
@@ -363,6 +364,7 @@ class NewsPipeline:
                 matched_cluster_id = await clustering_service.find_matching_cluster(db, art.embedding, update_cutoff)
                 if matched_cluster_id:
                     art.cluster_id = matched_cluster_id
+                    art.is_processed = True
                     clusters_to_update.add(matched_cluster_id)
                     cluster = await db.get(StoryCluster, matched_cluster_id)
                     if cluster:
@@ -545,6 +547,11 @@ class NewsPipeline:
             # Rule 1: Cluster Size Constraint — Minimum 2 independent sources
             unique_source_ids = set(art.source_id for art in group if art.source_id is not None)
             if len(unique_source_ids) < 2:
+                # If single-source article is older than 2 hours without getting a second source, mark processed to avoid memory piling
+                for art in group:
+                    if art.published_at and art.published_at < datetime.utcnow() - timedelta(hours=2):
+                        art.is_processed = True
+                await db.commit()
                 logger.info(f"Skipping single-source cluster '{group[0].title[:50]}...' (requires >= 2 independent sources). Waiting for further coverage.")
                 continue
 
@@ -570,6 +577,7 @@ class NewsPipeline:
                 logger.info(f"Group '{group[0].title[:50]}...' merged into existing cluster #{matched_cid} instead of creating duplicate.")
                 for art in group:
                     art.cluster_id = matched_cid
+                    art.is_processed = True
                 clusters_to_update.add(matched_cid)
                 await db.commit()
                 continue
@@ -590,6 +598,12 @@ class NewsPipeline:
                 is_important, imp_score, imp_reason = await ai_service.filter_cluster_importance(articles_payload)
                 if not is_important:
                     logger.info(f"Cluster '{group[0].title[:50]}...' discarded by cheap LLM filter (score={imp_score}/10, reason: '{imp_reason}').")
+                    # CRITICAL: Mark discarded articles as processed so they NEVER trigger repeated LLM calls!
+                    for art in group:
+                        art.is_processed = True
+                        art.importance_score = imp_score
+                        art.importance_reason = imp_reason
+                    await db.commit()
                     continue
 
                 # Rule 3: Heavy LLM Analytical Card Generation (LLM_MODEL)
@@ -635,6 +649,7 @@ class NewsPipeline:
                         logger.info(f"Duplicate story detected ('{ai_card.title}' matches cluster #{rec_c.id} '{rec_c.title}'). Attaching articles to #{rec_c.id} instead of creating duplicate.")
                         for art in group:
                             art.cluster_id = rec_c.id
+                            art.is_processed = True
                         rec_c.article_count = (rec_c.article_count or 1) + len(group)
                         await db.commit()
                         is_duplicate_cluster = True
@@ -673,6 +688,9 @@ class NewsPipeline:
 
                 for art in group:
                     art.cluster_id = cluster.id
+                    art.is_processed = True
+                    art.importance_score = cluster_imp_score
+                    art.importance_reason = cluster_imp_reason
 
                 await db.commit()
                 recent_clusters.append(cluster)
